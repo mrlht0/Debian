@@ -37,66 +37,56 @@
 # CMD ["/start.sh"]
 
 # =============================================================
-# Hai user
+# Hai user 1 port
 # ============================================================
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PORT=8080
 
-# ─── Install base ─────────────────────────────────────────
 RUN apt-get update && apt-get install -y \
-    curl wget git bash nano \
-    procps htop \
+    nginx curl wget git bash \
     ca-certificates \
-    build-essential \
-    python3 python3-pip \
-    && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
-    && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ─── Install ttyd ─────────────────────────────────────────
+# ttyd
 RUN wget -O /usr/local/bin/ttyd \
     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
     chmod +x /usr/local/bin/ttyd
 
-# ─── Users ────────────────────────────────────────────────
+# users
 RUN useradd -m admin && echo "admin:admin123" | chpasswd
 RUN useradd -m test && echo "test:123" | chpasswd
 
-# ─── Workspace ────────────────────────────────────────────
-RUN mkdir -p /workspace/test && \
-    chown -R test:test /workspace/test
+RUN mkdir -p /workspace/test && chown -R test:test /workspace/test
 
-WORKDIR /workspace
+# hạn chế test
+RUN printf 'cd /workspace/test\nexport TMOUT=900\nalias cd="echo blocked"\n' > /home/test/.bashrc
 
-# ─── Prompt gọn ───────────────────────────────────────────
-RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
+# nginx config
+RUN printf 'server {\n\
+    listen %s;\n\
+\n\
+    location /admin/ {\n\
+        proxy_pass http://localhost:7681/;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection "upgrade";\n\
+    }\n\
+\n\
+    location /test/ {\n\
+        proxy_pass http://localhost:7682/;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection "upgrade";\n\
+    }\n\
+}\n' "$PORT" > /etc/nginx/sites-enabled/default
 
-# ─── Giới hạn user test ───────────────────────────────────
-RUN printf 'cd /workspace/test\n\
-export TMOUT=900\n\
-alias cd="echo blocked"\n\
-alias rm="echo blocked"\n\
-alias shutdown="echo blocked"\n\
-alias reboot="echo blocked"\n\
-' > /home/test/.bashrc && chown test:test /home/test/.bashrc
-
-# ─── Start script ─────────────────────────────────────────
+# start
 RUN printf '#!/bin/bash\n\
-echo "Starting ttyd..."\n\
-echo "Admin: /admin | Test: /test"\n\
-\n\
-# admin (full quyền)\n\
-ttyd -p 8081 -c admin:admin123 -W bash &\n\
-\n\
-# test (bị giới hạn)\n\
-ttyd -p 8082 -c test:123 -W su - test &\n\
-\n\
-# giữ container sống\n\
-wait\n\
+ttyd -p 7681 -c admin:admin123 bash &\n\
+ttyd -p 7682 -c test:123 su - test &\n\
+nginx -g "daemon off;"\n\
 ' > /start.sh && chmod +x /start.sh
 
-EXPOSE 8081 8082
+EXPOSE 8080
 
 CMD ["/start.sh"]
