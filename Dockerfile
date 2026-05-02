@@ -9,11 +9,12 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     build-essential \
     python3 python3-pip \
-    nodejs npm \
+    && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
+    && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ─── Install code-server (VS Code web) ────────────────────
-RUN curl -fsSL https://code-server.dev/install.sh | sh
+# RUN curl -fsSL https://code-server.dev/install.sh | sh
 
 # ─── Install ttyd ─────────────────────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
