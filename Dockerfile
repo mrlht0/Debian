@@ -42,49 +42,35 @@
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PORT=8080
 
+# ─── Install nhẹ ─────────────────────────────
 RUN apt-get update && apt-get install -y \
-    nginx curl wget git bash \
+    bash curl wget git nano \
+    procps htop \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ttyd
+# ─── ttyd ───────────────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
     chmod +x /usr/local/bin/ttyd
 
-# users
-RUN useradd -m admin && echo "admin:admin123" | chpasswd
-RUN useradd -m test && echo "test:123" | chpasswd
+# ─── tạo user test sandbox ──────────────────
+RUN useradd -m test && \
+    echo "test:123" | chpasswd && \
+    mkdir -p /home/test/work && \
+    chown -R test:test /home/test
 
-RUN mkdir -p /workspace/test && chown -R test:test /workspace/test
+# ─── prompt đẹp ─────────────────────────────
+RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
 
-# hạn chế test
-RUN printf 'cd /workspace/test\nexport TMOUT=900\nalias cd="echo blocked"\n' > /home/test/.bashrc
-
-# nginx config
-RUN printf 'server {\n\
-    listen %s;\n\
-\n\
-    location /admin/ {\n\
-        proxy_pass http://localhost:7681/;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection "upgrade";\n\
-    }\n\
-\n\
-    location /test/ {\n\
-        proxy_pass http://localhost:7682/;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection "upgrade";\n\
-    }\n\
-}\n' "$PORT" > /etc/nginx/sites-enabled/default
-
-# start
+# ─── start script ───────────────────────────
 RUN printf '#!/bin/bash\n\
-ttyd -p 7681 -c admin:admin123 bash &\n\
-ttyd -p 7682 -c test:123 su - test &\n\
-nginx -g "daemon off;"\n\
+echo "Starting ttyd on port $PORT"\n\
+exec ttyd -p $PORT \\\n\
+  -c admin:admin123 \\\n\
+  -c test:123 \\\n\
+  -W bash\n\
 ' > /start.sh && chmod +x /start.sh
 
 EXPOSE 8080
