@@ -2,8 +2,9 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PORT=8080
+ENV PASSWORD=123456
 
-# ─── Install base + dev tools ─────────────────────────────
+# ─── Install base ─────────────────────────────────────────
 RUN apt-get update && apt-get install -y \
     curl wget git bash nano \
     ca-certificates \
@@ -13,34 +14,20 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ─── Install code-server (VS Code web) ────────────────────
-# RUN curl -fsSL https://code-server.dev/install.sh | sh
-
 # ─── Install ttyd ─────────────────────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
     chmod +x /usr/local/bin/ttyd
 
 # ─── Workspace ────────────────────────────────────────────
-RUN mkdir -p /workspace
 WORKDIR /workspace
-
-# ─── Password (đổi nếu muốn) ─────────────────────────────
-ENV PASSWORD=123456
 
 # ─── Start script ─────────────────────────────────────────
 RUN printf '#!/bin/bash\n\
-# start ttyd (terminal web)\n\
-ttyd -p 7681 -c admin:$PASSWORD -W bash &\n\
-\n\
-# start VS Code web\n\
-# code-server \
-  --bind-addr 0.0.0.0:$PORT \
-  --auth password \
-  --password $PASSWORD \
-  /workspace\n\
+echo "Starting ttyd on port $PORT"\n\
+exec ttyd -p $PORT -c admin:$PASSWORD -W bash\n\
 ' > /start.sh && chmod +x /start.sh
 
-EXPOSE 8080 7681
+EXPOSE 8080
 
 CMD ["/start.sh"]
