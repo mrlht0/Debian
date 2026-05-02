@@ -22,10 +22,13 @@ RUN wget -O /usr/local/bin/ttyd \
 # ─── Workspace ────────────────────────────────────────────
 WORKDIR /workspace
 
+# ─── Đổi user ────────────────────────────────────────────
+RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
+
 # ─── Start script ─────────────────────────────────────────
 RUN printf '#!/bin/bash\n\
 echo "Starting ttyd on port $PORT"\n\
-exec ttyd -p $PORT -c admin:$PASSWORD -W bash\n\
+exec ttyd -p $PORT -c :$PASSWORD -W bash\n\
 ' > /start.sh && chmod +x /start.sh
 
 EXPOSE 8080
