@@ -7,7 +7,7 @@ ENV PASSWORD=123456
 # ─── Install base ─────────────────────────────────────────
 RUN apt-get update && apt-get install -y \
     curl wget git bash nano \
-    rocps htop \
+    procps htop \
     ca-certificates \
     build-essential \
     python3 python3-pip \
