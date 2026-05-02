@@ -34,7 +34,7 @@ RUN printf '#!/bin/bash\n\
 ttyd -p 7681 -c admin:$PASSWORD -W bash &\n\
 \n\
 # start VS Code web\n\
-code-server \
+# code-server \
   --bind-addr 0.0.0.0:$PORT \
   --auth password \
   --password $PASSWORD \
