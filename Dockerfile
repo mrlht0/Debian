@@ -193,8 +193,8 @@ exec tmux attach -t $SESSION\n\
 # ─── 6. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
 printf '(proxy_port) {\n\
-    handle /{args[0]}* {\n\
-        reverse_proxy localhost:{args[0]}\n\
+    handle /{args.0}* {\n\
+        reverse_proxy localhost:{args.0}\n\
     }\n\
 }\n\
 \n\
