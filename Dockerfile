@@ -238,10 +238,10 @@ ttyd -p 8081 -W /start.sh &\n\
 \n\
 # ttyd phụ (Cổng 8082 - Base path /terminal)\n\
 # Sửa lại đoạn khởi chạy ttyd phụ vs (Tham số -W viết hoa là để cho phép ghi dữ liệu).
-ttyd -p 8082 -W -b /terminal bash &
+ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-# Ví dụ chạy sẵn ttyd trên port 8083 để bạn test (Base path /8083)\n\
-ttyd -p 8083 -b /8083 bash &\n\
+# ttyd test (Cổng 8083)\n\
+ttyd -p 8083 -W -b /8083 bash &\n\
 \n\
 echo "Caddy đang lắng nghe tại port 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
