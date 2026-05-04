@@ -40,11 +40,116 @@
 # Cloud Dev: ttyd + tmux + Caddy (multi route FIXED)
 # ==============================================================
 
+# FROM debian:bookworm-slim
+
+# ENV DEBIAN_FRONTEND=noninteractive
+
+# # ─── Install base ─────────────────────────
+# RUN apt update && apt install -y \
+#     bash curl wget git nano \
+#     procps htop tmux \
+#     ca-certificates \
+#     caddy \
+#     && apt clean && rm -rf /var/lib/apt/lists/*
+
+# # ─── Install ttyd ─────────────────────────
+# RUN wget -O /usr/local/bin/ttyd \
+#     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
+#     chmod +x /usr/local/bin/ttyd
+
+# # ─── Workspace ────────────────────────────
+# WORKDIR /workspace
+
+# # ─── Prompt ──────────────────────────────
+# RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
+
+# # ─── tmux config ─────────────────────────
+# RUN printf "set -g mouse off\n\
+# unbind -n MouseDown3Pane\n\
+# set -g history-limit 10000\n\
+# setw -g mode-keys vi\n\
+# " > /root/.tmux.conf
+
+# # ─── tmux auto ───────────────────────────
+# RUN printf '#!/bin/bash\n\
+# SESSION=main\n\
+# tmux has-session -t $SESSION 2>/dev/null\n\
+# if [ $? != 0 ]; then\n\
+#   tmux new-session -d -s $SESSION\n\
+#   tmux split-window -h\n\
+#   tmux split-window -v\n\
+#   tmux select-layout tiled\n\
+# fi\n\
+# exec tmux attach -t $SESSION\n\
+# ' > /start.sh && chmod +x /start.sh
+
+# # ─── Caddy config (FIXED) ─────────────────
+# RUN mkdir -p /etc/caddy && \
+# printf ':8080 {\n\
+# \n\
+#     # terminal phụ\n\
+#     handle_path /terminal* {\n\
+#         reverse_proxy localhost:8082\n\
+#     }\n\
+# \n\
+#     # reserved ports\n\
+#     handle_path /8083* {\n\
+#         reverse_proxy localhost:8083\n\
+#     }\n\
+#     handle_path /8084* {\n\
+#         reverse_proxy localhost:8084\n\
+#     }\n\
+#     handle_path /8085* {\n\
+#         reverse_proxy localhost:8085\n\
+#     }\n\
+#     handle_path /8086* {\n\
+#         reverse_proxy localhost:8086\n\
+#     }\n\
+#     handle_path /8087* {\n\
+#         reverse_proxy localhost:8087\n\
+#     }\n\
+#     handle_path /8088* {\n\
+#         reverse_proxy localhost:8088\n\
+#     }\n\
+#     handle_path /8089* {\n\
+#         reverse_proxy localhost:8089\n\
+#     }\n\
+# \n\
+#     # default → ttyd tmux\n\
+#     handle {\n\
+#         reverse_proxy localhost:8081\n\
+#     }\n\
+# }\n' > /etc/caddy/Caddyfile
+
+# # ─── Run all ─────────────────────────────
+# RUN printf '#!/bin/bash\n\
+# echo "Starting services..."\n\
+# \n\
+# # ttyd chính (tmux)\n\
+# ttyd -p 8081 -W /start.sh &\n\
+# \n\
+# # ttyd phụ\n\
+# ttyd -p 8082 -b /terminal bash &\n\
+# \n\
+# # chạy caddy\n\
+# # exec caddy run --config /etc/caddy/Caddyfile\n\
+# exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+# ' > /run.sh && chmod +x /run.sh
+
+# EXPOSE 8080
+
+# CMD ["/run.sh"]
+
+
+# ==============================================================
+# Cloud Dev: ttyd + tmux + Caddy (Full Fixed Multi-Route)
+# ==============================================================
+
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ─── Install base ─────────────────────────
+# ─── 1. Cài đặt các gói cơ bản ─────────────────────────
 RUN apt update && apt install -y \
     bash curl wget git nano \
     procps htop tmux \
@@ -52,25 +157,24 @@ RUN apt update && apt install -y \
     caddy \
     && apt clean && rm -rf /var/lib/apt/lists/*
 
-# ─── Install ttyd ─────────────────────────
+# ─── 2. Cài đặt ttyd (bản mới nhất) ─────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
     chmod +x /usr/local/bin/ttyd
 
-# ─── Workspace ────────────────────────────
+# ─── 3. Cấu hình thư mục làm việc ────────────────────────────
 WORKDIR /workspace
 
-# ─── Prompt ──────────────────────────────
+# ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
 
-# ─── tmux config ─────────────────────────
 RUN printf "set -g mouse off\n\
 unbind -n MouseDown3Pane\n\
 set -g history-limit 10000\n\
 setw -g mode-keys vi\n\
 " > /root/.tmux.conf
 
-# ─── tmux auto ───────────────────────────
+# ─── 5. Script tự động khởi tạo Tmux session ───────────────────────────
 RUN printf '#!/bin/bash\n\
 SESSION=main\n\
 tmux has-session -t $SESSION 2>/dev/null\n\
@@ -83,56 +187,47 @@ fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
-# ─── Caddy config (FIXED) ─────────────────
+# ─── 6. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
+# Sử dụng handle thay vì handle_path cho các dịch vụ đã set base path ở backend
 RUN mkdir -p /etc/caddy && \
 printf ':8080 {\n\
 \n\
-    # terminal phụ\n\
-    handle_path /terminal* {\n\
+    # 1. Terminal phụ (Port 8082)\n\
+    handle /terminal* {\n\
         reverse_proxy localhost:8082\n\
     }\n\
 \n\
-    # reserved ports\n\
-    handle_path /8083* {\n\
-        reverse_proxy localhost:8083\n\
-    }\n\
-    handle_path /8084* {\n\
-        reverse_proxy localhost:8084\n\
-    }\n\
-    handle_path /8085* {\n\
-        reverse_proxy localhost:8085\n\
-    }\n\
-    handle_path /8086* {\n\
-        reverse_proxy localhost:8086\n\
-    }\n\
-    handle_path /8087* {\n\
-        reverse_proxy localhost:8087\n\
-    }\n\
-    handle_path /8088* {\n\
-        reverse_proxy localhost:8088\n\
-    }\n\
-    handle_path /8089* {\n\
-        reverse_proxy localhost:8089\n\
-    }\n\
+    # 2. Các Port dự phòng (8083 - 8089)\n\
+    # Lưu ý: Backend chạy trên các port này PHẢI hỗ trợ base path tương ứng\n\
+    handle /8083* { reverse_proxy localhost:8083 }\n\
+    handle /8084* { reverse_proxy localhost:8084 }\n\
+    handle /8085* { reverse_proxy localhost:8085 }\n\
+    handle /8086* { reverse_proxy localhost:8086 }\n\
+    handle /8087* { reverse_proxy localhost:8087 }\n\
+    handle /8088* { reverse_proxy localhost:8088 }\n\
+    handle /8089* { reverse_proxy localhost:8089 }\n\
 \n\
-    # default → ttyd tmux\n\
+    # 3. Default (Root /) -> ttyd tmux\n\
     handle {\n\
         reverse_proxy localhost:8081\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
-# ─── Run all ─────────────────────────────
+# ─── 7. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
+# Quan trọng: Thêm tham số -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
-echo "Starting services..."\n\
+echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 \n\
-# ttyd chính (tmux)\n\
+# ttyd chính (Cổng 8081 - Root path)\n\
 ttyd -p 8081 -W /start.sh &\n\
 \n\
-# ttyd phụ\n\
+# ttyd phụ (Cổng 8082 - Base path /terminal)\n\
 ttyd -p 8082 -b /terminal bash &\n\
 \n\
-# chạy caddy\n\
-# exec caddy run --config /etc/caddy/Caddyfile\n\
+# Ví dụ chạy sẵn ttyd trên port 8083 để bạn test (Base path /8083)\n\
+ttyd -p 8083 -b /8083 bash &\n\
+\n\
+echo "Caddy đang lắng nghe tại port 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
