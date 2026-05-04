@@ -191,41 +191,72 @@ exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
 # ─── 6. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
-# ─── 6. Cấu hình Caddyfile (FIXED SYNTAX) ─────────────────
 RUN mkdir -p /etc/caddy && \
-printf ':8080 {\n\
+printf '(proxy_port) {\n\
+    handle /{args[0]}* {\n\
+        reverse_proxy localhost:{args[0]}\n\
+    }\n\
+}\n\
+\n\
+:8080 {\n\
     handle /terminal* {\n\
         reverse_proxy localhost:8082\n\
     }\n\
+# \n\
+#     handle /8083* {\n\
+#         reverse_proxy localhost:8083\n\
+#     }\n\
+# \n\
+#     handle /8084* {\n\
+#         reverse_proxy localhost:8084\n\
+#     }\n\
+# \n\
+#     handle /8085* {\n\
+#         reverse_proxy localhost:8085\n\
+#     }\n\
+# \n\
+#     handle /8086* {\n\
+#         reverse_proxy localhost:8086\n\
+#     }\n\
+# \n\
+#     handle /8087* {\n\
+#         reverse_proxy localhost:8087\n\
+#     }\n\
+# \n\
+#     handle /8088* {\n\
+#         reverse_proxy localhost:8088\n\
+#     }\n\
+# \n\
+#     handle /8089* {\n\
+#         reverse_proxy localhost:8089\n\
+#     }\n\
 \n\
-    handle /8083* {\n\
-        reverse_proxy localhost:8083\n\
-    }\n\
-\n\
-    handle /8084* {\n\
-        reverse_proxy localhost:8084\n\
-    }\n\
-\n\
-    handle /8085* {\n\
-        reverse_proxy localhost:8085\n\
-    }\n\
-\n\
-    handle /8086* {\n\
-        reverse_proxy localhost:8086\n\
-    }\n\
-\n\
-    handle /8087* {\n\
-        reverse_proxy localhost:8087\n\
-    }\n\
-\n\
-    handle /8088* {\n\
-        reverse_proxy localhost:8088\n\
-    }\n\
-\n\
-    handle /8089* {\n\
+    handle /7681* {\n\
         reverse_proxy localhost:8089\n\
     }\n\
 \n\
+    handle /18789* {\n\
+        reverse_proxy localhost:8089\n\
+    }\n\
+\n\
+    handle /18791* {\n\
+        reverse_proxy localhost:18791\n\
+    }\n\
+\n\
+    # Sử dụng Snippet cho các port hàng loạt\n\
+    import proxy_port 8083\n\
+    import proxy_port 8084\n\
+    import proxy_port 8085\n\
+    import proxy_port 8086\n\
+    import proxy_port 8087\n\
+    import proxy_port 8088\n\
+    import proxy_port 8089\n\
+    import proxy_port 10000\n\
+    import proxy_port 10001\n\
+    import proxy_port 10002\n\
+    import proxy_port 10003\n\
+\n\
+    # Mặc định\n\
     handle {\n\
         reverse_proxy localhost:8081\n\
     }\n\
