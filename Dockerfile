@@ -155,7 +155,10 @@ RUN apt update && apt install -y \
     procps htop tmux \
     ca-certificates \
     caddy \
-    && apt clean && rm -rf /var/lib/apt/lists/*
+    python3 python3-pip \
+    && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
+    && apt-get install -y nodejs \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ─── 2. Cài đặt ttyd (bản mới nhất) ─────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
