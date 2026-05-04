@@ -37,11 +37,13 @@
 # CMD ["/start.sh"]
 
 # ==============================================================
-# ttyd + tmux
+# ttyd + tmux (lightweight, mouse off, port 8080)
 # ==============================================================
+
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PORT=8080
 
 # ─── Install cực nhẹ ───────────────────────
 RUN apt-get update && apt-get install -y \
@@ -59,51 +61,39 @@ RUN wget -O /usr/local/bin/ttyd \
 # ─── workspace ────────────────────────────
 WORKDIR /workspace
 
-# ─── prompt đẹp ───────────────────────────
+# ─── prompt ───────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
 
 # ─── tmux config ──────────────────────────
-RUN printf "set -g mouse on\n\
+RUN printf "set -g mouse off\n\
+unbind -n MouseDown3Pane\n\
 set -g history-limit 10000\n\
 setw -g mode-keys vi\n\
 bind r source-file ~/.tmux.conf \\; display \"Reloaded!\"\n\
 " > /root/.tmux.conf
 
-# ─── auto tmux script ─────────────────────
+# ─── auto tmux ────────────────────────────
 RUN printf '#!/bin/bash\n\
 SESSION=main\n\
-\n\
-# nếu chưa có thì tạo session\n\
 tmux has-session -t $SESSION 2>/dev/null\n\
 if [ $? != 0 ]; then\n\
   tmux new-session -d -s $SESSION\n\
-\n\
-  # chia layout sẵn\n\
-  tmux split-window -h -t $SESSION\n\
-  tmux split-window -v -t $SESSION:0.0\n\
-  tmux select-layout -t $SESSION tiled\n\
+  tmux split-window -h\n\
+  tmux split-window -v\n\
+  tmux select-layout tiled\n\
 fi\n\
-\n\
-# attach\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
-
-# Copy & pate & ẩn menu chuột phải
-# ─── tmux config ────────────────────────
-RUN echo "set -g mouse off" >> /root/.tmux.conf && \
-    echo "unbind -n MouseDown3Pane" >> /root/.tmux.conf
 
 # ─── run ttyd ─────────────────────────────
 RUN printf '#!/bin/bash\n\
 echo "Starting ttyd + tmux on port $PORT"\n\
-exec ttyd -p $PORT -W /start.sh\n\
-# exec ttyd -p $PORT -c admin:123456 -W /start.sh\n\
+exec ttyd -p 8080 -W /start.sh\n\
 ' > /run.sh && chmod +x /run.sh
 
-EXPOSE 8080 #port:8080
+EXPOSE 8080
 
 CMD ["/run.sh"]
-
 
 
 # # =============================================================
