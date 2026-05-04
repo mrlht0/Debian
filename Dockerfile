@@ -37,42 +37,40 @@
 # CMD ["/start.sh"]
 
 # ==============================================================
-# ttyd + tmux (lightweight, mouse off, port 8080)
+# Cloud Dev: ttyd + tmux + Caddy (multi route)
 # ==============================================================
 
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PORT=8080
 
-# ─── Install cực nhẹ ───────────────────────
-RUN apt-get update && apt-get install -y \
+# ─── Install base ─────────────────────────
+RUN apt update && apt install -y \
     bash curl wget git nano \
-    procps htop \
-    tmux \
+    procps htop tmux \
     ca-certificates \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    caddy \
+    && apt clean && rm -rf /var/lib/apt/lists/*
 
-# ─── ttyd ─────────────────────────────────
+# ─── Install ttyd ─────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
     chmod +x /usr/local/bin/ttyd
 
-# ─── workspace ────────────────────────────
+# ─── Workspace ────────────────────────────
 WORKDIR /workspace
 
-# ─── prompt ───────────────────────────────
+# ─── Prompt ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
 
-# ─── tmux config ──────────────────────────
+# ─── tmux config ─────────────────────────
 RUN printf "set -g mouse off\n\
 unbind -n MouseDown3Pane\n\
 set -g history-limit 10000\n\
 setw -g mode-keys vi\n\
-bind r source-file ~/.tmux.conf \\; display \"Reloaded!\"\n\
 " > /root/.tmux.conf
 
-# ─── auto tmux ────────────────────────────
+# ─── tmux auto ───────────────────────────
 RUN printf '#!/bin/bash\n\
 SESSION=main\n\
 tmux has-session -t $SESSION 2>/dev/null\n\
@@ -85,10 +83,43 @@ fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
-# ─── run ttyd ─────────────────────────────
+# ─── Caddy config ────────────────────────
+RUN mkdir -p /etc/caddy && \
+printf ':8080 {\n\
+\n\
+    # main ttyd (tmux)\n\
+    handle {\n\
+        reverse_proxy localhost:8081\n\
+    }\n\
+\n\
+    # terminal phụ\n\
+    handle /terminal* {\n\
+        reverse_proxy localhost:8082\n\
+    }\n\
+\n\
+    # reserve ports (chưa có service)\n\
+    handle /8083* { reverse_proxy localhost:8083 }\n\
+    handle /8084* { reverse_proxy localhost:8084 }\n\
+    handle /8085* { reverse_proxy localhost:8085 }\n\
+    handle /8086* { reverse_proxy localhost:8086 }\n\
+    handle /8087* { reverse_proxy localhost:8087 }\n\
+    handle /8088* { reverse_proxy localhost:8088 }\n\
+    handle /8089* { reverse_proxy localhost:8089 }\n\
+\n\
+}\n' > /etc/caddy/Caddyfile
+
+# ─── Run all ─────────────────────────────
 RUN printf '#!/bin/bash\n\
-echo "Starting ttyd + tmux on port $PORT"\n\
-exec ttyd -p 8080 -W /start.sh\n\
+echo "Starting services..."\n\
+\n\
+# ttyd chính (tmux)\n\
+ttyd -p 8081 -W /start.sh &\n\
+\n\
+# ttyd phụ\n\
+ttyd -p 8082 bash &\n\
+\n\
+# chạy caddy\n\
+exec caddy run --config /etc/caddy/Caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
