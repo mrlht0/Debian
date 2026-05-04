@@ -37,7 +37,7 @@
 # CMD ["/start.sh"]
 
 # ==============================================================
-# Cloud Dev: ttyd + tmux + Caddy (multi route)
+# Cloud Dev: ttyd + tmux + Caddy (multi route FIXED)
 # ==============================================================
 
 FROM debian:bookworm-slim
@@ -83,29 +83,42 @@ fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
-# ─── Caddy config ────────────────────────
+# ─── Caddy config (FIXED) ─────────────────
 RUN mkdir -p /etc/caddy && \
 printf ':8080 {\n\
 \n\
-    # main ttyd (tmux)\n\
-    handle {\n\
-        reverse_proxy localhost:8081\n\
-    }\n\
-\n\
     # terminal phụ\n\
-    handle /terminal* {\n\
+    handle_path /terminal/* {\n\
         reverse_proxy localhost:8082\n\
     }\n\
 \n\
-    # reserve ports (chưa có service)\n\
-    handle /8083* { reverse_proxy localhost:8083 }\n\
-    handle /8084* { reverse_proxy localhost:8084 }\n\
-    handle /8085* { reverse_proxy localhost:8085 }\n\
-    handle /8086* { reverse_proxy localhost:8086 }\n\
-    handle /8087* { reverse_proxy localhost:8087 }\n\
-    handle /8088* { reverse_proxy localhost:8088 }\n\
-    handle /8089* { reverse_proxy localhost:8089 }\n\
+    # reserved ports\n\
+    handle_path /8083/* {\n\
+        reverse_proxy localhost:8083\n\
+    }\n\
+    handle_path /8084/* {\n\
+        reverse_proxy localhost:8084\n\
+    }\n\
+    handle_path /8085/* {\n\
+        reverse_proxy localhost:8085\n\
+    }\n\
+    handle_path /8086/* {\n\
+        reverse_proxy localhost:8086\n\
+    }\n\
+    handle_path /8087/* {\n\
+        reverse_proxy localhost:8087\n\
+    }\n\
+    handle_path /8088/* {\n\
+        reverse_proxy localhost:8088\n\
+    }\n\
+    handle_path /8089/* {\n\
+        reverse_proxy localhost:8089\n\
+    }\n\
 \n\
+    # default → ttyd tmux\n\
+    handle {\n\
+        reverse_proxy localhost:8081\n\
+    }\n\
 }\n' > /etc/caddy/Caddyfile
 
 # ─── Run all ─────────────────────────────
