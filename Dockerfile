@@ -88,30 +88,30 @@ RUN mkdir -p /etc/caddy && \
 printf ':8080 {\n\
 \n\
     # terminal phụ\n\
-    handle_path /terminal/* {\n\
+    handle_path /terminal* {\n\
         reverse_proxy localhost:8082\n\
     }\n\
 \n\
     # reserved ports\n\
-    handle_path /8083/* {\n\
+    handle_path /8083* {\n\
         reverse_proxy localhost:8083\n\
     }\n\
-    handle_path /8084/* {\n\
+    handle_path /8084* {\n\
         reverse_proxy localhost:8084\n\
     }\n\
-    handle_path /8085/* {\n\
+    handle_path /8085* {\n\
         reverse_proxy localhost:8085\n\
     }\n\
-    handle_path /8086/* {\n\
+    handle_path /8086* {\n\
         reverse_proxy localhost:8086\n\
     }\n\
-    handle_path /8087/* {\n\
+    handle_path /8087* {\n\
         reverse_proxy localhost:8087\n\
     }\n\
-    handle_path /8088/* {\n\
+    handle_path /8088* {\n\
         reverse_proxy localhost:8088\n\
     }\n\
-    handle_path /8089/* {\n\
+    handle_path /8089* {\n\
         reverse_proxy localhost:8089\n\
     }\n\
 \n\
@@ -129,10 +129,11 @@ echo "Starting services..."\n\
 ttyd -p 8081 -W /start.sh &\n\
 \n\
 # ttyd phụ\n\
-ttyd -p 8082 bash &\n\
+ttyd -p 8082 -b /terminal bash &\n\
 \n\
 # chạy caddy\n\
-exec caddy run --config /etc/caddy/Caddyfile\n\
+# exec caddy run --config /etc/caddy/Caddyfile\n\
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
