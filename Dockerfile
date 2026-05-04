@@ -100,7 +100,7 @@ exec ttyd -p $PORT -W /start.sh\n\
 # exec ttyd -p $PORT -c admin:123456 -W /start.sh\n\
 ' > /run.sh && chmod +x /run.sh
 
-EXPOSE 1111 #port:1111
+EXPOSE 8080 #port:8080
 
 CMD ["/run.sh"]
 
