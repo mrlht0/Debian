@@ -155,7 +155,7 @@ RUN apt update && apt install -y \
     procps htop tmux \
     ca-certificates \
     caddy \
-    python3 python3-pip \
+    # python3 python3-pip \
     && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
