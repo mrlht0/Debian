@@ -94,7 +94,7 @@ echo "Starting ttyd + tmux on port $PORT"\n\
 exec ttyd -p $PORT -c admin:123456 -W /start.sh\n\
 ' > /run.sh && chmod +x /run.sh
 
-EXPOSE 8080
+EXPOSE 1 #port:1
 
 CMD ["/run.sh"]
 
