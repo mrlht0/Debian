@@ -88,13 +88,19 @@ fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
+# Copy & pate & ẩn menu chuột phải
+# ─── tmux config ────────────────────────
+RUN echo "set -g mouse off" >> /root/.tmux.conf && \
+    echo "unbind -n MouseDown3Pane" >> /root/.tmux.conf
+
 # ─── run ttyd ─────────────────────────────
 RUN printf '#!/bin/bash\n\
 echo "Starting ttyd + tmux on port $PORT"\n\
-exec ttyd -p $PORT -c admin:123456 -W /start.sh\n\
+exec ttyd -p $PORT -W /start.sh\n\
+# exec ttyd -p $PORT -c admin:123456 -W /start.sh\n\
 ' > /run.sh && chmod +x /run.sh
 
-EXPOSE 1 #port:1
+EXPOSE 1111 #port:1111
 
 CMD ["/run.sh"]
 
