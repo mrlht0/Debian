@@ -188,26 +188,41 @@ exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
 # ─── 6. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
-# Sử dụng handle thay vì handle_path cho các dịch vụ đã set base path ở backend
+# ─── 6. Cấu hình Caddyfile (FIXED SYNTAX) ─────────────────
 RUN mkdir -p /etc/caddy && \
 printf ':8080 {\n\
-\n\
-    # 1. Terminal phụ (Port 8082)\n\
     handle /terminal* {\n\
         reverse_proxy localhost:8082\n\
     }\n\
 \n\
-    # 2. Các Port dự phòng (8083 - 8089)\n\
-    # Lưu ý: Backend chạy trên các port này PHẢI hỗ trợ base path tương ứng\n\
-    handle /8083* { reverse_proxy localhost:8083 }\n\
-    handle /8084* { reverse_proxy localhost:8084 }\n\
-    handle /8085* { reverse_proxy localhost:8085 }\n\
-    handle /8086* { reverse_proxy localhost:8086 }\n\
-    handle /8087* { reverse_proxy localhost:8087 }\n\
-    handle /8088* { reverse_proxy localhost:8088 }\n\
-    handle /8089* { reverse_proxy localhost:8089 }\n\
+    handle /8083* {\n\
+        reverse_proxy localhost:8083\n\
+    }\n\
 \n\
-    # 3. Default (Root /) -> ttyd tmux\n\
+    handle /8084* {\n\
+        reverse_proxy localhost:8084\n\
+    }\n\
+\n\
+    handle /8085* {\n\
+        reverse_proxy localhost:8085\n\
+    }\n\
+\n\
+    handle /8086* {\n\
+        reverse_proxy localhost:8086\n\
+    }\n\
+\n\
+    handle /8087* {\n\
+        reverse_proxy localhost:8087\n\
+    }\n\
+\n\
+    handle /8088* {\n\
+        reverse_proxy localhost:8088\n\
+    }\n\
+\n\
+    handle /8089* {\n\
+        reverse_proxy localhost:8089\n\
+    }\n\
+\n\
     handle {\n\
         reverse_proxy localhost:8081\n\
     }\n\
