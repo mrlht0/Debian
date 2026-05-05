@@ -30,7 +30,14 @@ RUN mkdir -p /etc/caddy && printf "{\n\
         uri strip_prefix /terminal\n\
         reverse_proxy 127.0.0.1:8082\n\
     }\n\
+\n\
+    handle /10000* {\n\
+#        uri strip_prefix /10000\n\
+        reverse_proxy 127.0.0.1:10000\n\
+    }\n\
+\n\
     handle {\n\
+        uri strip_prefix /10000\n\
         reverse_proxy 127.0.0.1:10000\n\
     }\n\
 }" > /etc/caddy/Caddyfile
