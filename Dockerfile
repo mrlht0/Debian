@@ -262,10 +262,64 @@ printf '(proxy_port) {\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
-# ─── 7. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
+# ─── 7. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
+RUN printf '#!/bin/bash\n\
+THRESHOLD=85\n\
+LOG_LINES=5\n\
+LOG_FILE="/workspace/mem.log"\n\
+\n\
+log_buffer=()\n\
+\n\
+get_mem_info() {\n\
+  max=$(cat /sys/fs/cgroup/memory.max)\n\
+  current=$(cat /sys/fs/cgroup/memory.current)\n\
+  used_mb=$((current / 1024 / 1024))\n\
+  max_mb=$((max / 1024 / 1024))\n\
+  percent=$((current * 100 / max))\n\
+  echo "$used_mb $max_mb $percent"\n\
+}\n\
+\n\
+add_log() {\n\
+  log_buffer+=("$1")\n\
+  if [ "${#log_buffer[@]}" -gt "$LOG_LINES" ]; then\n\
+    log_buffer=("${log_buffer[@]:1}")\n\
+  fi\n\
+  printf "%s\n" "${log_buffer[@]}" > "$LOG_FILE"\n\
+}\n\
+\n\
+wait_for_memory() {\n\
+  while true; do\n\
+    read used_mb max_mb percent <<< $(get_mem_info)\n\
+    if [ "$percent" -lt "$THRESHOLD" ]; then break; fi\n\
+    add_log "⏸ RAM ${percent}% > ${THRESHOLD}%"\n\
+    sleep 1\n\
+  done\n\
+}\n\
+\n\
+process_job() {\n\
+  job=$1\n\
+  read used_mb max_mb percent <<< $(get_mem_info)\n\
+  add_log "Job $job | ${used_mb}/${max_mb}MB (${percent}%)"\n\
+  sleep 0.3\n\
+}\n\
+\n\
+main() {\n\
+  while true; do\n\
+    for i in $(seq 1 1000); do\n\
+      wait_for_memory\n\
+      process_job $i\n\
+    done\n\
+  done\n\
+}\n\
+\n\
+main\n' > /usr/local/bin/mem_guard.sh && chmod +x /usr/local/bin/mem_guard.sh
+
+# ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
 # Quan trọng: Thêm tham số -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
 echo "Đang khởi động dịch vụ Cloud Dev..."\n\
+# chạy mem_guard nền (KHÔNG log ra ngoài)
+nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n
 \n\
 # ttyd chính (Cổng 8081 - Root path)\n\
 ttyd -p 8081 -W /start.sh &\n\
