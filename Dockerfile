@@ -325,9 +325,7 @@ printf '(proxy_port) {\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle_path / {\n\
-        reverse_proxy localhost:20128\n\
-        reverse_proxy localhost:18789\n\
-        reverse_proxy localhost:8081\n\
+        reverse_proxy localhost:20128\n\ reverse_proxy localhost:18789\n\ reverse_proxy localhost:8081\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
@@ -350,17 +348,6 @@ ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 # ⏳ đợi service lên
 sleep 1\n\
-\n\
-# 🔥 detect service
-# if curl -s localhost:18789 > /dev/null; then\n\
-#     export DEFAULT=18789\n\
-# elif curl -s localhost:20128 > /dev/null; then\n\
-#     export DEFAULT=20128\n\
-# else\n\
-#     export DEFAULT=8081\n\
-# fi\n\
-# \n\
-# echo "Default port: $DEFAULT"\n\
 
 echo "Caddy đang chạy..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
