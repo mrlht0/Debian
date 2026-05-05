@@ -33,27 +33,30 @@ RUN mkdir -p /etc/caddy && printf "{\n\
     }\n\
 }" > /etc/caddy/Caddyfile
 
-# 3. Script khởi chạy (Sử dụng đường dẫn tuyệt đối để fix lỗi "command not found")
+# 3. Script khởi chạy (Cần tìm đúng thư mục chứa server.js)
 RUN printf '#!/bin/bash\n\
-echo "--- System Status ---"\n\
+echo "--- Khởi động hệ thống ---"\n\
 \n\
-# Tìm đường dẫn bun thực tế nếu /usr/local/bin/bun không tồn tại\n\
+# Tìm thư mục chứa server.js (Thường là /app hoặc /)\n\
+APP_DIR="/app"\n\
+if [ ! -d "$APP_DIR" ]; then APP_DIR="/"; fi\n\
+cd $APP_DIR\n\
+\n\
+# Lấy đường dẫn Bun chuẩn\n\
 BUN_BIN=$(which bun || echo "/usr/local/bin/bun")\n\
 \n\
-echo "Starting Bun App with $BUN_BIN..."\n\
-$BUN_BIN server.js &\n\
+echo "Đang chạy Bun từ thư mục: $(pwd)"\n\
+$BUN_BIN server.js & \n\
 \n\
-echo "Starting Terminal on 8082..."\n\
+echo "Khởi động Terminal trên 8082..."\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-echo "Caddy is proxying on 8080..."\n\
+echo "Caddy xuất kích cổng 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
-# Đảm bảo lệnh ENTRYPOINT được xóa bỏ
 ENTRYPOINT []
-
-# Thiết lập môi trường
+# Quan trọng: Set WORKDIR về đúng nơi chứa code
 WORKDIR /app
 ENV PORT=8080
 EXPOSE 8080
