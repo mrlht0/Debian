@@ -327,13 +327,11 @@ printf '(proxy_port) {\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle {\n\
-        handle {
-            reverse_proxy localhost:18789 localhost:20128 localhost:8081 {
-                transport http {
-                    dial_timeout 1s
-                }
-            }
-        }
+        reverse_proxy localhost:18789 localhost:20128 localhost:8081 {\n\
+            transport http {\n\
+                dial_timeout 1s\n\
+            }\n\
+        }\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
