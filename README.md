@@ -7,7 +7,7 @@ tmux new -s mem
 /usr/local/bin/mem_guard.sh
 
 # các phím tắt tmux
-🧠 ⚡ Prefix (phím mở đầu)
+## 🧠 ⚡ Prefix (phím mở đầu)
 tmux set -g mouse off
 Mặc định:
 
@@ -15,7 +15,7 @@ Ctrl + b
 
 👉 mọi lệnh tmux đều bắt đầu bằng cái này
 
-🪟 📦 QUẢN LÝ PANEL (chia màn hình)
+## 🪟 📦 QUẢN LÝ PANEL (chia màn hình)
 ➜ chia ngang
 Ctrl + b  "
 ➜ chia dọc
@@ -30,7 +30,7 @@ Ctrl + b  o
 Ctrl + b  z
 ➜ đóng pane
 Ctrl + b  x
-🧱 🪟 WINDOW (tab)
+## 🧱 🪟 WINDOW (tab)
 ➜ tạo tab mới
 Ctrl + b  c
 ➜ chuyển tab
@@ -40,14 +40,14 @@ Ctrl + b  p   # previous
 Ctrl + b  0 → 9
 ➜ rename tab
 Ctrl + b  ,
-🔁 🔄 SESSION (rất quan trọng)
+## 🔁 🔄 SESSION (rất quan trọng)
 ➜ detach (thoát mà không tắt)
 Ctrl + b  d
 ➜ attach lại
 tmux attach
 ➜ list session
 tmux ls
-🖱️ 🧲 COPY / SCROLL (quan trọng với bạn)
+## 🖱️ 🧲 COPY / SCROLL (quan trọng với bạn)
 ➜ vào chế độ scroll
 Ctrl + b  [
 
