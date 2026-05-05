@@ -171,7 +171,7 @@ WORKDIR /workspace
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
 
-RUN printf "set -g mouse off\n\
+RUN printf "set -g mouse on\n\
 unbind -n MouseDown3Pane\n\
 set -g history-limit 10000\n\
 setw -g mode-keys vi\n\
@@ -344,7 +344,7 @@ ttyd -p 8081 -W /start.sh &\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 # ttyd test (Cổng 8083)\n\
-ttyd -p 8083 -W -b /8083 bash &\n\
+# ttyd -p 8083 -W -b /8083 bash &\n\
 \n\
 echo "Caddy đang lắng nghe tại port 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
