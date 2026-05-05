@@ -325,7 +325,7 @@ printf '(proxy_port) {\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle_path / {\n\
-        reverse_proxy localhost:20128\n\ reverse_proxy localhost:18789\n\ reverse_proxy localhost:8081\n\
+        reverse_proxy localhost:20128 reverse_proxy localhost:18789 reverse_proxy localhost:8081\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
