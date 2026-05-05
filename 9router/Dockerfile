@@ -30,21 +30,24 @@ RUN mkdir -p /etc/caddy && printf ":8080 {\n\
     }\n\
 }" > /etc/caddy/Caddyfile
 
-# 3. Tạo Script khởi chạy (Fix lỗi 404 bằng cách bỏ -b vì đã dùng handle_path)
+# 3. Script khởi chạy
 RUN printf '#!/bin/bash\n\
-echo "Khởi động ttyd..."\n\
-ttyd -p 7681 -W bash &\n\
+echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 \n\
-echo "Khởi động Bun Server..."\n\
-bun server.js &\n\
+# 1. ttyd chính (Giao diện điều khiển - Cổng 8081)\n\
+# Giả sử bạn muốn cái này làm trang chủ\n\
+ttyd -p 8081 -W bash &\n\
 \n\
-echo "Khởi động Caddy..."\n\
+# 2. ttyd phụ (Cổng 8082 cho đường dẫn /terminal)\n\
+# Dùng -b /terminal để ttyd tự xử lý định tuyến bên trong nó\n\
+ttyd -p 8082 -W -b /terminal bash &\n\
+\n\
+echo "Caddy đang lắng nghe tại port 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
-# 4. Render Port
+# Render sẽ nhận diện port này
 ENV PORT=8080
 EXPOSE 8080
 
-# Chạy bằng script
 CMD ["/bin/bash", "/run.sh"]
