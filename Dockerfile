@@ -318,14 +318,14 @@ printf '(proxy_port) {\n\
     import proxy_port 8087\n\
     import proxy_port 8088\n\
     import proxy_port 8089\n\
-    import proxy_port 10000\n\
+    # import proxy_port 10000\n\
     import proxy_port 10001\n\
     import proxy_port 10002\n\
     import proxy_port 10003\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle_path / {\n\
-        reverse_proxy localhost:20128\n\
+        reverse_proxy localhost:10000\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
