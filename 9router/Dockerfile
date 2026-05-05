@@ -11,6 +11,7 @@
 
 FROM antiantiops/9router:0.3.69
 USER root
+ENV APP_NAME=9router
 
 # Cài đặt công cụ cần thiết
 RUN apk update && apk add --no-cache wget ca-certificates bash tar
@@ -26,6 +27,7 @@ RUN mkdir -p /etc/caddy && printf "{\n\
 }\n\
 :8080 {\n\
     handle /terminal* {\n\
+        uri strip_prefix /terminal\n\
         reverse_proxy 127.0.0.1:8082\n\
     }\n\
     handle {\n\
@@ -45,11 +47,13 @@ if [ -z "$BUN_BIN" ]; then BUN_BIN="bun"; fi\n\
 SERVER_FILE=$(find / -name server.js 2>/dev/null | head -n 1)\n\
 cd $(dirname "$SERVER_FILE")\n\
 \n\
-echo "9router App đang chạy bằng $BUN_BIN tại $(pwd)..."\n\
-$BUN_BIN server.js &\n\
+echo "9router App đang chạy tại $(pwd)..."\n\
+$BUN_BIN server.js --port 20128 &\n\
 \n\
 echo "9router Terminal đang chạy trên cổng 8082..."\n\
-ttyd -p 8082 -t title="9router Terminal" -W -b /terminal bash &\n\
+APP_NAME=${APP_NAME:-9router}\n\
+ttyd -p 8082 -W -b /terminal bash -c "cd $(pwd) && bash" &\n\
+"echo '🚀 Welcome to $APP_NAME' && bash"\n\
 \n\
 echo "Caddy (Gateway 9router) đang điều phối cổng 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
