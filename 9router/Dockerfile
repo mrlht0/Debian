@@ -25,13 +25,13 @@ RUN wget -qO /usr/local/bin/caddy "https://caddyserver.com/api/download?os=linux
     && chmod +x /usr/local/bin/caddy
 
 # 3. Cấu hình Caddyfile
-RUN mkdir -p /etc/caddy && echo ":$PORT { \n\
-    handle /terminal* { \n\
-        reverse_proxy localhost:7681 \n\
-    } \n\
-    handle { \n\
-        reverse_proxy localhost:20128 \n\
-    } \n\
+RUN mkdir -p /etc/caddy && printf ":8080 {\n\
+    handle /terminal* {\n\
+        reverse_proxy localhost:7681\n\
+    }\n\
+    handle {\n\
+        reverse_proxy localhost:20128\n\
+    }\n\
 }" > /etc/caddy/Caddyfile
 
 # 4. Thiết lập Port (Render thường dùng biến môi trường $PORT)
@@ -39,4 +39,7 @@ ENV PORT=8080
 EXPOSE 8080
 
 # 5. Lệnh khởi chạy song song
-CMD ttyd -p 7681 -W bash & caddy run --config /etc/caddy/Caddyfile --adapter caddyfile & bun server.js
+# Chạy ttyd và app nền, Caddy chạy chính (không có dấu & ở cuối caddy)
+CMD ttyd -p 7681 -W -b /terminal bash & \
+    bun server.js & \
+    caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
