@@ -284,6 +284,8 @@ exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 EXPOSE 8080
 
 CMD ["/run.sh"]
+# Chạy lại (reload) caddy
+# caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 
 
 # # =============================================================
