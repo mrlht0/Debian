@@ -19,9 +19,9 @@ RUN wget -qO /usr/local/bin/ttyd \
 https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
 && chmod +x /usr/local/bin/ttyd
 
-# ===== caddy (static binary) =====
+# ===== caddy (stable binary) =====
 RUN wget -qO /usr/local/bin/caddy \
-https://caddyserver.com/api/download?os=linux&arch=amd64 \
+https://github.com/caddyserver/caddy/releases/latest/download/caddy_linux_amd64 \
 && chmod +x /usr/local/bin/caddy
 
 # ===== Caddy config =====
