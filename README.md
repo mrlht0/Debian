@@ -8,7 +8,7 @@ tmux new -s mem
 
 # các phím tắt tmux
 🧠 ⚡ Prefix (phím mở đầu)
-
+tmux set -g mouse off
 Mặc định:
 
 Ctrl + b
