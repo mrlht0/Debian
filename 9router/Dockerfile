@@ -11,15 +11,16 @@
 
 FROM antiantiops/9router:0.3.69
 
-# Cài đặt công cụ tải file
 USER root
-RUN apt-get update && apt-get install -y wget ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Sử dụng apk cho Alpine Linux
+RUN apk update && apk add --no-cache wget ca-certificates bash
 
 # 1. Cài ttyd
 RUN wget -qO /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
     && chmod +x /usr/local/bin/ttyd
 
-# 2. Cài Caddy
+# 2. Cài Caddy (Tải bản dành cho Linux x86_64)
 RUN wget -qO /usr/local/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64" \
     && chmod +x /usr/local/bin/caddy
 
