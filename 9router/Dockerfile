@@ -11,66 +11,31 @@
 
 FROM antiantiops/9router:0.3.69
 
+# Cài đặt công cụ tải file
+USER root
+RUN apt-get update && apt-get install -y wget ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# 1. Cài ttyd
+RUN wget -qO /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
+    && chmod +x /usr/local/bin/ttyd
+
+# 2. Cài Caddy
+RUN wget -qO /usr/local/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64" \
+    && chmod +x /usr/local/bin/caddy
+
+# 3. Cấu hình Caddyfile
+RUN mkdir -p /etc/caddy && echo ":$PORT { \n\
+    handle /terminal* { \n\
+        reverse_proxy localhost:7681 \n\
+    } \n\
+    handle { \n\
+        reverse_proxy localhost:20128 \n\
+    } \n\
+}" > /etc/caddy/Caddyfile
+
+# 4. Thiết lập Port (Render thường dùng biến môi trường $PORT)
 ENV PORT=8080
-WORKDIR /workspace
-
-# =========================
-# 1. ttyd (static binary)
-# =========================
-RUN wget -qO /usr/local/bin/ttyd \
-https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
-&& chmod +x /usr/local/bin/ttyd
-
-# =========================
-# 2. caddy (static binary)
-# =========================
-RUN wget -qO /usr/local/bin/caddy \
-https://github.com/caddyserver/caddy/releases/latest/download/caddy_2.8.4_linux_amd64 \
-&& chmod +x /usr/local/bin/caddy
-
-# =========================
-# 3. Caddy config (gateway 1 port)
-# =========================
-RUN mkdir -p /etc/caddy && cat <<EOF > /etc/caddy/Caddyfile
-:8080 {
-
-    handle /terminal* {
-        reverse_proxy localhost:7681
-    }
-
-    handle /ttyd* {
-        reverse_proxy localhost:8081
-    }
-
-    handle / {
-        reverse_proxy localhost:20128
-    }
-}
-EOF
-
-# =========================
-# 4. Start script (QUAN TRỌNG)
-# =========================
-RUN cat <<'EOF' > /start.sh
-#!/bin/sh
-
-echo "Starting services..."
-
-# 9router (app chính)
-bun server.js &
-
-# ttyd web terminal
-ttyd -p 7681 -W bash &
-
-# fallback ttyd
-ttyd -p 8081 -W bash &
-
-# Caddy MUST be foreground process (Render yêu cầu)
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-EOF
-
-RUN chmod +x /start.sh
-
 EXPOSE 8080
 
-CMD ["/start.sh"]
+# 5. Lệnh khởi chạy song song
+CMD ttyd -p 7681 -W bash & caddy run --config /etc/caddy/Caddyfile --adapter caddyfile & bun server.js
