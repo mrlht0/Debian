@@ -231,15 +231,15 @@ printf '(proxy_port) {\n\
 #         reverse_proxy localhost:8089\n\
 #     }\n\
 \n\
-    handle /7681* {\n\
-        reverse_proxy localhost:8089\n\
+    handle /ttyd* {\n\
+        reverse_proxy localhost:7681\n\
     }\n\
 \n\
-    handle /18789* {\n\
-        reverse_proxy localhost:8089\n\
+    handle /9router* {\n\
+        reverse_proxy 127.0.0.1:20128\n\
     }\n\
 \n\
-    handle /18791* {\n\
+    handle /openclaw* {\n\
         reverse_proxy localhost:18791\n\
     }\n\
 \n\
