@@ -318,6 +318,7 @@ main\n' > /usr/local/bin/mem_guard.sh && chmod +x /usr/local/bin/mem_guard.sh
 # Quan trọng: Thêm tham số -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
 echo "Đang khởi động dịch vụ Cloud Dev..."\n\
+\n\
 # chạy mem_guard nền (KHÔNG log ra ngoài)
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n
 \n\
