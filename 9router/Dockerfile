@@ -24,22 +24,31 @@ RUN wget -qO /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest
 RUN wget -qO /usr/local/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64" \
     && chmod +x /usr/local/bin/caddy
 
-# 3. Cấu hình Caddyfile
-RUN mkdir -p /etc/caddy && printf ":8080 {\n\
+# 3. Cấu hình Caddyfile sử dụng snippet như ý bạn
+RUN mkdir -p /etc/caddy && printf "(proxy_port) {\n\
+    handle /{args.0}* {\n\
+        reverse_proxy localhost:{args.0}\n\
+    }\n\
+}\n\
+\n\
+:8080 {\n\
+    # Ưu tiên handle cho terminal trước
     handle /terminal* {\n\
         reverse_proxy localhost:7681\n\
     }\n\
+\n\
+    # Tất cả các path khác đẩy về Bun server
     handle {\n\
         reverse_proxy localhost:20128\n\
     }\n\
 }" > /etc/caddy/Caddyfile
 
-# 4. Thiết lập Port (Render thường dùng biến môi trường $PORT)
+# 4. Thiết lập Port
 ENV PORT=8080
 EXPOSE 8080
 
-# 5. Lệnh khởi chạy song song
-# Chạy ttyd và app nền, Caddy chạy chính (không có dấu & ở cuối caddy)
+# 5. Khởi chạy
+# LƯU Ý: Thêm -b /terminal để ttyd biết nó đang nằm ở path đó
 CMD ttyd -p 7681 -W -b /terminal bash & \
     bun server.js & \
     caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
