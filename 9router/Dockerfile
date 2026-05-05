@@ -11,26 +11,27 @@
 
 FROM antiantiops/9router:0.3.69
 
-ENV PORT=8080
+ENV PORT=20128
 WORKDIR /workspace
 
-# ===== ttyd (static, không phụ thuộc OS) =====
+# ===== ttyd =====
 RUN wget -qO /usr/local/bin/ttyd \
 https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
 && chmod +x /usr/local/bin/ttyd
 
-# ===== caddy (stable binary) =====
+# ===== caddy (fix đúng binary stable) =====
 RUN wget -qO /usr/local/bin/caddy \
-https://github.com/caddyserver/caddy/releases/latest/download/caddy_linux_amd64 \
+https://github.com/caddyserver/caddy/releases/latest/download/caddy_2.8.4_linux_amd64 \
 && chmod +x /usr/local/bin/caddy
 
 # ===== Caddy config =====
-RUN mkdir -p /etc/caddy && printf '\
-:8080 {\n\
-  reverse_proxy localhost:20128\n\
-}\n' > /etc/caddy/Caddyfile
+RUN mkdir -p /etc/caddy && cat <<EOF > /etc/caddy/Caddyfile
+:8080 {
+    reverse_proxy localhost:20128
+}
+EOF
 
-# ===== start =====
+# ===== start script =====
 CMD sh -c "\
 bun server.js & \
 ttyd -p 8081 -W bash & \
