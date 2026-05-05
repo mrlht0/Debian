@@ -190,79 +190,7 @@ fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
-# ─── 6. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
-RUN mkdir -p /etc/caddy && \
-printf '(proxy_port) {\n\
-    handle /{args.0}* {\n\
-        reverse_proxy localhost:{args.0}\n\
-    }\n\
-}\n\
-\n\
-:8080 {\n\
-    handle /terminal* {\n\
-        reverse_proxy localhost:8082\n\
-    }\n\
-# \n\
-#     handle /8083* {\n\
-#         reverse_proxy localhost:8083\n\
-#     }\n\
-# \n\
-#     handle /8084* {\n\
-#         reverse_proxy localhost:8084\n\
-#     }\n\
-# \n\
-#     handle /8085* {\n\
-#         reverse_proxy localhost:8085\n\
-#     }\n\
-# \n\
-#     handle /8086* {\n\
-#         reverse_proxy localhost:8086\n\
-#     }\n\
-# \n\
-#     handle /8087* {\n\
-#         reverse_proxy localhost:8087\n\
-#     }\n\
-# \n\
-#     handle /8088* {\n\
-#         reverse_proxy localhost:8088\n\
-#     }\n\
-# \n\
-#     handle /8089* {\n\
-#         reverse_proxy localhost:8089\n\
-#     }\n\
-\n\
-    handle /ttyd* {\n\
-        reverse_proxy localhost:7681\n\
-    }\n\
-\n\
-    handle /tmux* {\n\
-        reverse_proxy localhost:8081\n\
-    }\n\
-\n\
-    handle /openclaw* {\n\
-        reverse_proxy 127.0.0.1:18789\n\
-    }\n\
-\n\
-    # Sử dụng Snippet cho các port hàng loạt\n\
-    import proxy_port 8083\n\
-    import proxy_port 8084\n\
-    import proxy_port 8085\n\
-    import proxy_port 8086\n\
-    import proxy_port 8087\n\
-    import proxy_port 8088\n\
-    import proxy_port 8089\n\
-    import proxy_port 10000\n\
-    import proxy_port 10001\n\
-    import proxy_port 10002\n\
-    import proxy_port 10003\n\
-\n\
-    # Mặc định 1 trong ba từ trái qua phải\n\
-    handle {\n\
-        reverse_proxy localhost:18789 localhost:20128 localhost:8081\n\
-    }\n\
-}\n' > /etc/caddy/Caddyfile
-
-# ─── 7. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
+# ─── 6. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
 RUN cat <<'EOF' > /usr/local/bin/mem_guard.sh
 #!/bin/bash
 
@@ -329,6 +257,86 @@ EOF
 
 RUN chmod +x /usr/local/bin/mem_guard.sh
 
+# ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
+RUN mkdir -p /etc/caddy && \
+printf '(proxy_port) {\n\
+    handle /{args.0}* {\n\
+        reverse_proxy localhost:{args.0}\n\
+    }\n\
+}\n\
+\n\
+:8080 {\n\
+    handle /terminal* {\n\
+        reverse_proxy localhost:8082\n\
+    }\n\
+# \n\
+#     handle /8083* {\n\
+#         reverse_proxy localhost:8083\n\
+#     }\n\
+# \n\
+#     handle /8084* {\n\
+#         reverse_proxy localhost:8084\n\
+#     }\n\
+# \n\
+#     handle /8085* {\n\
+#         reverse_proxy localhost:8085\n\
+#     }\n\
+# \n\
+#     handle /8086* {\n\
+#         reverse_proxy localhost:8086\n\
+#     }\n\
+# \n\
+#     handle /8087* {\n\
+#         reverse_proxy localhost:8087\n\
+#     }\n\
+# \n\
+#     handle /8088* {\n\
+#         reverse_proxy localhost:8088\n\
+#     }\n\
+# \n\
+#     handle /8089* {\n\
+#         reverse_proxy localhost:8089\n\
+#     }\n\
+\n\
+    handle /ttyd* {\n\
+        uri strip_prefix /terminal\n\
+        reverse_proxy localhost:7681\n\
+    }\n\
+\n\
+    handle /tmux* {\n\
+        uri strip_prefix /tmux\n\
+        reverse_proxy localhost:8081\n\
+    }\n\
+\n\
+    handle /openclaw* {\n\
+        reverse_proxy 127.0.0.1:18789\n\
+    }\n\
+\n\
+    # Sử dụng Snippet cho các port hàng loạt\n\
+    import proxy_port 8083\n\
+    import proxy_port 8084\n\
+    import proxy_port 8085\n\
+    import proxy_port 8086\n\
+    import proxy_port 8087\n\
+    import proxy_port 8088\n\
+    import proxy_port 8089\n\
+    import proxy_port 10000\n\
+    import proxy_port 10001\n\
+    import proxy_port 10002\n\
+    import proxy_port 10003\n\
+\n\
+    # Mặc định 1 trong ba từ trái qua phải\n\
+    handle {\n\
+        handle {
+            reverse_proxy localhost:18789 localhost:20128 localhost:8081 {
+                transport http {
+                    dial_timeout 1s
+                }
+            }
+        }
+    }\n\
+}\n' > /etc/caddy/Caddyfile
+
 # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
 # Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
@@ -338,7 +346,7 @@ echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
 # ttyd chính (Cổng 8081)\n\
-ttyd -p 8081 -W /start.sh &\n\
+ttyd -p 8081 -W -b /tmux /start.sh &\n\
 \n\
 # ttyd phụ (Cổng 8082)\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
