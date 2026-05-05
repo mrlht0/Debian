@@ -235,8 +235,8 @@ printf '(proxy_port) {\n\
         reverse_proxy localhost:7681\n\
     }\n\
 \n\
-    handle /9router* {\n\
-        reverse_proxy localhost:20128\n\
+    handle /tmux* {\n\
+        reverse_proxy localhost:8081\n\
     }\n\
 \n\
     handle /openclaw* {\n\
@@ -256,9 +256,9 @@ printf '(proxy_port) {\n\
     import proxy_port 10002\n\
     import proxy_port 10003\n\
 \n\
-    # Mặc định\n\
+    # Mặc định 1 trong ba từ trái qua phải\n\
     handle {\n\
-        reverse_proxy localhost:8081\n\
+        reverse_proxy localhost:18789 localhost:20128 localhost:8081\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
