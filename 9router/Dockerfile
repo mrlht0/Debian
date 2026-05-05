@@ -12,6 +12,7 @@
 FROM antiantiops/9router:0.3.69
 USER root
 ENV APP_NAME=9router
+ENV PORT=8080
 
 # Cài đặt công cụ cần thiết
 RUN apk update && apk add --no-cache wget ca-certificates bash tar
@@ -60,7 +61,6 @@ exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 
 # Xóa bỏ entrypoint cũ
 ENTRYPOINT []
-ENV PORT=8080
 EXPOSE 8080
 
 CMD ["/bin/bash", "/run.sh"]
