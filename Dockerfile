@@ -310,6 +310,11 @@ printf '(proxy_port) {\n\
         reverse_proxy 127.0.0.1:18789\n\
     }\n\
 \n\
+    handle /10000* {\n\
+#        uri strip_prefix /10000\n\
+        reverse_proxy 127.0.0.1:10000\n\
+    }\n\
+\n\
     # Sử dụng Snippet cho các port hàng loạt\n\
     import proxy_port 8083\n\
     import proxy_port 8084\n\
@@ -324,7 +329,8 @@ printf '(proxy_port) {\n\
     import proxy_port 10003\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
-    handle_path / {\n\
+    handle {\n\
+        uri strip_prefix /10000\n\
         reverse_proxy 127.0.0.1:10000\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
