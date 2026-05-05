@@ -299,12 +299,10 @@ printf '(proxy_port) {\n\
 #     }\n\
 \n\
     handle /ttyd* {\n\
-        uri strip_prefix /terminal\n\
         reverse_proxy localhost:7681\n\
     }\n\
 \n\
     handle /tmux* {\n\
-        uri strip_prefix /tmux\n\
         reverse_proxy localhost:8081\n\
     }\n\
 \n\
