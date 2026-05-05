@@ -44,20 +44,25 @@ RUN mkdir -p /etc/caddy && printf "{\n\
 }" > /etc/caddy/Caddyfile
 
 # 3. Script khởi chạy run.sh (Cập nhật tên 9router và Fix path)
-RUN printf '#!/bin/bash\n\
-echo "--- Hệ thống 9router đang khởi động ---"\n\
-\n\
-cd /app 2>/dev/null || cd /root\n\
-\n\
-echo "9router App đang chạy tại $(pwd)..."\n\
-PORT=10000 node server.js &\n\
-\n\
-echo "9router Terminal đang chạy..."\n\
-ttyd -p 8082 -W -b /terminal bash -c "cd $(pwd) && bash" &\n\
+#!/bin/bash
+echo "--- Hệ thống 9router đang khởi động ---"
 
-echo "Caddy (Gateway 9router) đang điều phối cổng 8080..."\n\
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
-' > /run.sh && chmod +x /run.sh
+cd /root
+
+echo "Terminal đang chạy..."
+ttyd -p 8082 -W -b /terminal bash &
+
+sleep 2
+
+PORT_DETECT=$(netstat -tulnp 2>/dev/null | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' | grep -v 8082 | head -n 1)
+
+PORT_DETECT=${PORT_DETECT:-8082}
+
+echo "Detected app port: $PORT_DETECT"
+
+export PORT_DETECT
+
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 
 # Xóa bỏ entrypoint cũ
 ENTRYPOINT []
