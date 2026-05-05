@@ -3,6 +3,8 @@
 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 
 # RAM
+watch -n 1 cat /workspace/mem.log
+### hoặc
 tmux new -s mem
 /usr/local/bin/mem_guard.sh
 
