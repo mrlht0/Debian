@@ -52,8 +52,9 @@ $BUN_BIN server.js --port 10000 &\n\
 \n\
 echo "9router Terminal đang chạy trên cổng 8082..."\n\
 APP_NAME=${APP_NAME:-9router}\n\
-ttyd -p 8082 -W -b /terminal bash -c "cd $(pwd) && bash" &\n\
-"echo '🚀 Welcome to $APP_NAME' && bash"\n\
+ttyd -p 8082 -t title="9router Terminal" -W -b /terminal bash -c "cd $(pwd) && bash" &
+# ttyd -p 8082 -W -b /terminal bash -c "cd $(pwd) && bash" &\n\
+# "echo '🚀 Welcome to $APP_NAME' && bash"\n\
 \n\
 echo "Caddy (Gateway 9router) đang điều phối cổng 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
