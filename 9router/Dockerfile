@@ -31,7 +31,7 @@ RUN mkdir -p /etc/caddy && printf "{\n\
         reverse_proxy 127.0.0.1:8082\n\
     }\n\
     handle {\n\
-        reverse_proxy 127.0.0.1:20128\n\
+        reverse_proxy 127.0.0.1:10000\n\
     }\n\
 }" > /etc/caddy/Caddyfile
 
@@ -48,7 +48,7 @@ SERVER_FILE=$(find / -name server.js 2>/dev/null | head -n 1)\n\
 cd $(dirname "$SERVER_FILE")\n\
 \n\
 echo "9router App đang chạy tại $(pwd)..."\n\
-$BUN_BIN server.js --port 20128 &\n\
+$BUN_BIN server.js --port 10000 &\n\
 \n\
 echo "9router Terminal đang chạy trên cổng 8082..."\n\
 APP_NAME=${APP_NAME:-9router}\n\
