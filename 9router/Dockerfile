@@ -39,22 +39,16 @@ RUN mkdir -p /etc/caddy && printf "{\n\
 RUN printf '#!/bin/bash\n\
 echo "--- Hệ thống 9router đang khởi động ---"\n\
 \n\
-# Tìm đường dẫn Bun một cách tuyệt đối\n\
-BUN_BIN=$(find / -name bun -type f -executable 2>/dev/null | head -n 1)\n\
-if [ -z "$BUN_BIN" ]; then BUN_BIN="bun"; fi\n\
-\n\
-# Tìm file server.js và cd vào thư mục đó\n\
-SERVER_FILE=$(find / -name server.js 2>/dev/null | head -n 1)\n\
-cd $(dirname "$SERVER_FILE")\n\
+cd /app 2>/dev/null || cd /root\n\
 \n\
 echo "9router App đang chạy tại $(pwd)..."\n\
-$BUN_BIN server.js --port 10000 &\n\
+PORT=20128 bun server.js &\n\
 \n\
-echo "9router Terminal đang chạy trên cổng 8082..."\n\
-APP_NAME=${APP_NAME:-9router}\n\
-ttyd -p 8082 -t title="9router Terminal" -W -b /terminal bash -c "cd $(pwd) && bash" &
-# ttyd -p 8082 -W -b /terminal bash -c "cd $(pwd) && bash" &\n\
-
+echo "9router Terminal đang chạy..."\n\
+ttyd -p 8082 -t \"9router Terminal\" -W -b /terminal bash -c \"cd $(pwd) && bash\" &\n\
+\n\
+sleep 1\n\
+\n\
 echo "Caddy (Gateway 9router) đang điều phối cổng 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
