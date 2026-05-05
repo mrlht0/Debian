@@ -33,31 +33,30 @@ RUN mkdir -p /etc/caddy && printf "{\n\
     }\n\
 }" > /etc/caddy/Caddyfile
 
-# 3. Script khởi chạy (Cần tìm đúng thư mục chứa server.js)
+# 3. Script khởi chạy run.sh (Cập nhật tên 9router và Fix path)
 RUN printf '#!/bin/bash\n\
-echo "--- Khởi động hệ thống ---"\n\
+echo "--- Hệ thống 9router đang khởi động ---"\n\
 \n\
-# Tìm thư mục chứa server.js (Thường là /app hoặc /)\n\
-APP_DIR="/app"\n\
-if [ ! -d "$APP_DIR" ]; then APP_DIR="/"; fi\n\
-cd $APP_DIR\n\
+# Tìm đường dẫn Bun một cách tuyệt đối\n\
+BUN_BIN=$(find / -name bun -type f -executable 2>/dev/null | head -n 1)\n\
+if [ -z "$BUN_BIN" ]; then BUN_BIN="bun"; fi\n\
 \n\
-# Lấy đường dẫn Bun chuẩn\n\
-BUN_BIN=$(which bun || echo "/usr/local/bin/bun")\n\
+# Tìm file server.js và cd vào thư mục đó\n\
+SERVER_FILE=$(find / -name server.js 2>/dev/null | head -n 1)\n\
+cd $(dirname "$SERVER_FILE")\n\
 \n\
-echo "Đang chạy Bun từ thư mục: $(pwd)"\n\
-$BUN_BIN server.js & \n\
+echo "9router App đang chạy bằng $BUN_BIN tại $(pwd)..."\n\
+$BUN_BIN server.js &\n\
 \n\
-echo "Khởi động Terminal trên 8082..."\n\
-ttyd -p 8082 -W -b /terminal bash &\n\
+echo "9router Terminal đang chạy trên cổng 8082..."\n\
+ttyd -p 8082 -t title="9router Terminal" -W -b /terminal bash &\n\
 \n\
-echo "Caddy xuất kích cổng 8080..."\n\
+echo "Caddy (Gateway 9router) đang điều phối cổng 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
+# Xóa bỏ entrypoint cũ
 ENTRYPOINT []
-# Quan trọng: Set WORKDIR về đúng nơi chứa code
-WORKDIR /app
 ENV PORT=8080
 EXPOSE 8080
 
