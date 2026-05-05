@@ -16,11 +16,17 @@ USER root
 # Cài đặt công cụ cần thiết
 RUN apk update && apk add --no-cache wget ca-certificates bash
 
-# 1. Tải ttyd & Caddy (đảm bảo file binary sạch)
+# 1. Tải ttyd (Binary chuẩn)
 RUN wget -qO /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && chmod +x /usr/local/bin/ttyd
-RUN wget -qO /usr/local/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64" && chmod +x /usr/local/bin/caddy
 
-# 2. Cấu hình Caddyfile
+# 2. Tải Caddy (Dùng link trực tiếp từ GitHub để tránh file lỗi "Contact")
+# Bản v2.8.4 dành cho Linux amd64
+RUN wget -qO /tmp/caddy.tar.gz "https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz" \
+    && tar -zxvf /tmp/caddy.tar.gz -C /usr/local/bin caddy \
+    && chmod +x /usr/local/bin/caddy \
+    && rm /tmp/caddy.tar.gz
+
+# 3. Cấu hình Caddyfile
 RUN mkdir -p /etc/caddy && printf ":8080 {\n\
     handle /terminal* {\n\
         reverse_proxy localhost:8082\n\
@@ -30,25 +36,23 @@ RUN mkdir -p /etc/caddy && printf ":8080 {\n\
     }\n\
 }" > /etc/caddy/Caddyfile
 
-# 3. Tạo script khởi chạy độc lập
+# 4. Script khởi chạy (Thêm dấu gạch chéo cuối để tránh lỗi 404)
 RUN printf '#!/bin/bash\n\
-echo "--- Đang khởi chạy hệ thống tùy chỉnh ---"\n\
+echo "--- Khởi chạy Cloud Dev v2026 ---"\n\
 \n\
-# Chạy ttyd cổng 8081 (Trang chủ)\n\
+# ttyd 1 làm trang chủ\n\
 ttyd -p 8081 -W bash &\n\
 \n\
-# Chạy ttyd cổng 8082 (Cho path /terminal)\n\
+# ttyd 2 cho path /terminal\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-echo "Caddy đang điều phối tại port 8080..."\n\
+echo "Caddy đang chạy tại port 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
-# --- BƯỚC QUAN TRỌNG NHẤT ---
-# Xóa bỏ Entrypoint mặc định của image gốc để nó không chạy cái Menu kia nữa
+# Xóa bỏ Entrypoint cũ của image gốc
 ENTRYPOINT []
 
-# Thiết lập Port và chạy script của mình
 ENV PORT=8080
 EXPOSE 8080
 
