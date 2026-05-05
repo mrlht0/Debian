@@ -325,14 +325,7 @@ printf '(proxy_port) {\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle_path / {\n\
-        reverse_proxy localhost:18789 localhost:20128 localhost:8081 {\n\
-            lb_try_duration 2s\n\
-            lb_try_interval 200ms\n\
-    
-            transport http {\n\
-                dial_timeout 1s\n\
-            }\n\
-        }\n\
+        reverse_proxy localhost:{env.DEFAULT}\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
@@ -353,7 +346,21 @@ ttyd -p 8082 -W -b /terminal bash &\n\
 # ttyd test (Cổng 8083)\n\
 # ttyd -p 8083 -W -b /8083 bash &\n\
 \n\
-echo "Caddy đang lắng nghe tại port 8080..."\n\
+# ⏳ đợi service lên
+sleep 1\n\
+\n\
+# 🔥 detect service
+if curl -s localhost:18789 > /dev/null; then\n\
+    export DEFAULT=18789\n\
+elif curl -s localhost:20128 > /dev/null; then\n\
+    export DEFAULT=20128\n\
+else\n\
+    export DEFAULT=8081\n\
+fi\n\
+\n\
+echo "Default port: $DEFAULT"\n\
+
+echo "Caddy đang chạy..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
