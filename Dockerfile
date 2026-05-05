@@ -315,18 +315,17 @@ main() {\n\
 main\n' > /usr/local/bin/mem_guard.sh && chmod +x /usr/local/bin/mem_guard.sh
 
 # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
-# Quan trọng: Thêm tham số -b cho ttyd để khớp với đường dẫn của Caddy
+# Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
 echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 \n\
-# chạy mem_guard nền (KHÔNG log ra ngoài)
-nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n
+# chạy mem_guard nền\n\
+nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
-# ttyd chính (Cổng 8081 - Root path)\n\
+# ttyd chính (Cổng 8081)\n\
 ttyd -p 8081 -W /start.sh &\n\
 \n\
-# ttyd phụ (Cổng 8082 - Base path /terminal)\n\
-# Sửa lại đoạn khởi chạy ttyd phụ vs (Tham số -W viết hoa là để cho phép ghi dữ liệu).
+# ttyd phụ (Cổng 8082)\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 # ttyd test (Cổng 8083)\n\
