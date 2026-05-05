@@ -1,10 +1,10 @@
 # FROM antiantiops/9router:0.3.69
 
 # # Render sẽ dùng port này
-# ENV PORT=20128
+# ENV PORT=10000
 
 # # đảm bảo bind ra ngoài
-# EXPOSE 20128
+# EXPOSE 10000
 
 # # nếu image chưa có CMD rõ ràng thì fallback
 # CMD ["bun", "server.js"]
@@ -31,7 +31,7 @@ RUN mkdir -p /etc/caddy && printf "{\n\
         reverse_proxy 127.0.0.1:8082\n\
     }\n\
 \n\
-    handle /10000* {\n\
+    handle /ds2api* {\n\
 #        uri strip_prefix /10000\n\
         reverse_proxy 127.0.0.1:10000\n\
     }\n\
@@ -49,13 +49,11 @@ echo "--- Hệ thống 9router đang khởi động ---"\n\
 cd /app 2>/dev/null || cd /root\n\
 \n\
 echo "9router App đang chạy tại $(pwd)..."\n\
-PORT=20128 bun server.js &\n\
+PORT=10000 node server.js &\n\
 \n\
 echo "9router Terminal đang chạy..."\n\
-ttyd -p 8082 -t \"9router Terminal\" -W -b /terminal bash -c \"cd $(pwd) && bash\" &\n\
-\n\
-sleep 1\n\
-\n\
+ttyd -p 8082 -W -b /terminal bash -c "cd $(pwd) && bash" &\n\
+
 echo "Caddy (Gateway 9router) đang điều phối cổng 8080..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
