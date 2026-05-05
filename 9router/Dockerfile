@@ -23,10 +23,10 @@ RUN wget -qO /usr/local/bin/caddy "https://caddyserver.com/api/download?os=linux
 # 2. Cấu hình Caddyfile (Dùng handle_path để sạch path hơn)
 RUN mkdir -p /etc/caddy && printf ":8080 {\n\
     handle_path /terminal* {\n\
-        reverse_proxy localhost:7681\n\
+        reverse_proxy 127.0.0.1:7681\n\
     }\n\
     handle {\n\
-        reverse_proxy localhost:20128\n\
+        reverse_proxy 127.0.0.1:20128\n\
     }\n\
 }" > /etc/caddy/Caddyfile
 
