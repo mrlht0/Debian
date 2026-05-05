@@ -13,42 +13,38 @@ FROM antiantiops/9router:0.3.69
 
 USER root
 
-# Sử dụng apk cho Alpine Linux
+# Cài đặt công cụ
 RUN apk update && apk add --no-cache wget ca-certificates bash
 
-# 1. Cài ttyd
-RUN wget -qO /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
-    && chmod +x /usr/local/bin/ttyd
+# 1. Cài ttyd & Caddy
+RUN wget -qO /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && chmod +x /usr/local/bin/ttyd
+RUN wget -qO /usr/local/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64" && chmod +x /usr/local/bin/caddy
 
-# 2. Cài Caddy (Tải bản dành cho Linux x86_64)
-RUN wget -qO /usr/local/bin/caddy "https://caddyserver.com/api/download?os=linux&arch=amd64" \
-    && chmod +x /usr/local/bin/caddy
-
-# 3. Cấu hình Caddyfile sử dụng snippet như ý bạn
-RUN mkdir -p /etc/caddy && printf "(proxy_port) {\n\
-    handle /{args.0}* {\n\
-        reverse_proxy localhost:{args.0}\n\
-    }\n\
-}\n\
-\n\
-:8080 {\n\
-    # Ưu tiên handle cho terminal trước
-    handle /terminal* {\n\
+# 2. Cấu hình Caddyfile (Dùng handle_path để sạch path hơn)
+RUN mkdir -p /etc/caddy && printf ":8080 {\n\
+    handle_path /terminal* {\n\
         reverse_proxy localhost:7681\n\
     }\n\
-\n\
-    # Tất cả các path khác đẩy về Bun server
     handle {\n\
         reverse_proxy localhost:20128\n\
     }\n\
 }" > /etc/caddy/Caddyfile
 
-# 4. Thiết lập Port
+# 3. Tạo Script khởi chạy (Fix lỗi 404 bằng cách bỏ -b vì đã dùng handle_path)
+RUN printf '#!/bin/bash\n\
+echo "Khởi động ttyd..."\n\
+ttyd -p 7681 -W bash &\n\
+\n\
+echo "Khởi động Bun Server..."\n\
+bun server.js &\n\
+\n\
+echo "Khởi động Caddy..."\n\
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+' > /run.sh && chmod +x /run.sh
+
+# 4. Render Port
 ENV PORT=8080
 EXPOSE 8080
 
-# 5. Khởi chạy
-# LƯU Ý: Thêm -b /terminal để ttyd biết nó đang nằm ở path đó
-CMD ttyd -p 7681 -W -b /terminal bash & \
-    bun server.js & \
-    caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+# Chạy bằng script
+CMD ["/bin/bash", "/run.sh"]
