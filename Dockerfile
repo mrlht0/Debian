@@ -324,7 +324,7 @@ printf '(proxy_port) {\n\
     import proxy_port 10003\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
-    handle {\n\
+    handle_path / {\n\
         reverse_proxy localhost:18789 localhost:20128 localhost:8081 {\n\
             lb_try_duration 2s\n\
             lb_try_interval 200ms\n\
