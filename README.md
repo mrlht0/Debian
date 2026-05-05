@@ -8,6 +8,9 @@ watch -n 1 cat /workspace/mem.log
 tmux new -s mem
 /usr/local/bin/mem_guard.sh
 
+# cài đặt nhẹ
+npm install --no-audit --no-fund --prefer-offline --maxsockets=1
+
 # các phím tắt tmux
 ## 🧠 ⚡ Prefix (phím mở đầu)
 tmux set -g mouse off
