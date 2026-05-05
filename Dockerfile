@@ -236,11 +236,11 @@ printf '(proxy_port) {\n\
     }\n\
 \n\
     handle /9router* {\n\
-        reverse_proxy 127.0.0.1:20128\n\
+        reverse_proxy localhost:20128\n\
     }\n\
 \n\
     handle /openclaw* {\n\
-        reverse_proxy localhost:18791\n\
+        reverse_proxy 127.0.0.1:18789\n\
     }\n\
 \n\
     # Sử dụng Snippet cho các port hàng loạt\n\
