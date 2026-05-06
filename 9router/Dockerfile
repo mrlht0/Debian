@@ -75,19 +75,19 @@ export PORT=10000
 
 # Chạy node server.js làm tiến trình chính của Container
 echo "Đang thực thi: node server.js tại $(pwd)"
-# exec node server.js &
+exec node server.js &
 
 # Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
 # Khởi chạy App chính trong một vòng lặp chạy ngầm
-(
-  while true; do
-      echo "Đang khởi động App..."
-      node server.js >/dev/null 2>&1
-      # Vòng lặp sẽ DỪNG LẠI ở đây cho đến khi node server.js bị sập
-      echo "App sập, đang khởi động lại sau 2 giây..."
-      sleep 2
-  done
-) &
+# (
+#   while true; do
+#       echo "Đang khởi động App..."
+#       node server.js >/dev/null 2>&1
+#       # Vòng lặp sẽ DỪNG LẠI ở đây cho đến khi node server.js bị sập
+#       echo "App sập, đang khởi động lại sau 2 giây..."
+#       sleep 2
+#   done
+# ) &
 
 sleep 10
 
