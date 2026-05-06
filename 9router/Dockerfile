@@ -62,7 +62,7 @@ export PS1="9router:\w# "
 # Ép ứng dụng chạy ở cổng 10000 để Caddy có thể proxy vào
 echo "📦 Đang khởi động App chính (Node.js)..."
 export PORT=10000
-node /usr/local/lib/node_modules/9router/app/server.js &
+# node /usr/local/lib/node_modules/9router/app/server.js &
 
 # ==========================================
 # 2. Khởi chạy Terminal (ttyd)
