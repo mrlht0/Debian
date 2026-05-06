@@ -37,7 +37,7 @@ RUN mkdir -p /etc/caddy && printf '{\n\
     }\n\
 \n\
     handle {\n\
-        reverse_proxy 127.0.0.1:{env.APP_PORT}\n\
+        reverse_proxy 0.0.0.0:10000\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
