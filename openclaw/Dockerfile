@@ -99,10 +99,9 @@
 
 # CMD ["/bin/bash", "/run.sh"]
 
-FROM alpine/openclaw:2026.5.6
+FROM ghcr.io/openclaw/openclaw:latest
 
-# Render sẽ dùng port này
+# Render dùng port này
 ENV PORT=18789
 
-# đảm bảo bind ra ngoài
 EXPOSE 18789
