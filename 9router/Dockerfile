@@ -43,34 +43,38 @@ RUN mkdir -p /etc/caddy && printf '{\n\
 
 # run.sh (QUAN TRỌNG: chỉ tạo file)
 RUN printf '#!/bin/bash\n\
-#!/bin/bash
-echo "🚀 Starting 9router..."
-
-cd /root
-export PS1="9router:\w# "
-
-echo "🖥 ttyd starting..."
-ttyd -p 8082 -W -b /terminal bash &
-
-sleep 2
-
-# 🔥 FIX: lấy IP container thật
-IP=$(hostname -i | awk '{print $1}')
-PORT=10000
-
-echo "🔥 detected $IP:$PORT"
-
-echo "🌉 bridging..."
-socat TCP-LISTEN:10000,fork,reuseaddr TCP:$IP:$PORT &
-
-export APP_PORT=10000
-
-echo "=============================="
-echo " APP:       /"
-echo " TERMINAL:  /terminal"
-echo "=============================="
-
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+echo "🚀 Starting 9router..."\n\
+\n\
+cd /root\n\
+export PS1="9router:\\w# "\n\
+\n\
+echo "🖥 ttyd starting..."\n\
+ttyd -p 8082 -W -b /terminal bash &\n\
+\n\
+sleep 2\n\
+\n\
+# 🔥 FIX 1: lấy IP container an toàn\n\
+IP=$(hostname -i | awk '\''{print $1}'\'')\n\
+PORT=10000\n\
+\n\
+echo "🔥 detected $IP:$PORT"\n\
+\n\
+# 🔥 FIX 2: chỉ bridge nếu IP tồn tại\n\
+if [ -n "$IP" ]; then\n\
+    echo "🌉 bridging $IP:$PORT -> 127.0.0.1:10000"\n\
+    socat TCP-LISTEN:10000,fork,reuseaddr TCP:$IP:$PORT &\n\
+else\n\
+    echo "⚠️ Cannot detect IP, skip socat"\n\
+fi\n\
+\n\
+export APP_PORT=10000\n\
+\n\
+echo "=============================="\n\
+echo " APP:       /"\n\
+echo " TERMINAL:  /terminal"\n\
+echo "=============================="\n\
+\n\
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
 ENTRYPOINT []
