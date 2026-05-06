@@ -52,7 +52,7 @@ RUN cat > /run.sh <<'EOF'
 echo "🚀 Khởi động hệ thống 9router Custom..."
 # Tên máy
 cd /root
-export PS1="9router:\w# "\n\
+export PS1="9router:\w# "
 
 # 1. Khởi chạy App chính (Node.js)
 # echo "📦 Đang khởi động App chính tại cổng 10000..."
