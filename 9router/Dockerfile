@@ -15,7 +15,7 @@ USER root
 ENV APP_NAME=9router
 ENV PORT=8080
 
-RUN apk add --no-cache bash wget ca-certificates tar socat net-tools
+RUN apk add --no-cache bash wget ca-certificates tar net-tools
 
 RUN wget -qO /usr/local/bin/ttyd \
 https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
@@ -49,55 +49,47 @@ RUN mkdir -p /etc/caddy && printf '{\n\
 RUN cat > /run.sh <<'EOF'
 #!/bin/bash
 
-echo "🚀 Starting 9router..."
+echo "🚀 Khởi động hệ thống 9router..."
 
+# Thiết lập thư mục làm việc và giao diện dòng lệnh
 cd /root
 export PS1="9router:\w# "
 
-# ======================
-# Terminal (ttyd)
-# ======================
-echo "🖥 ttyd starting..."
+# ==========================================
+# 1. Khởi chạy App chính (Node.js)
+# ==========================================
+# Chúng ta chạy trực tiếp file server.js từ đường dẫn bạn cung cấp
+# Ép ứng dụng chạy ở cổng 10000 để Caddy có thể proxy vào
+echo "📦 Đang khởi động App chính (Node.js)..."
+export PORT=10000
+node /usr/local/lib/node_modules/9router/app/server.js &
+
+# ==========================================
+# 2. Khởi chạy Terminal (ttyd)
+# ==========================================
+echo "🖥 Đang khởi động Terminal..."
 ttyd -p 8082 -W -b /terminal bash &
 
+# Đợi một chút để các dịch vụ khởi động port nội bộ
 sleep 2
 
-# ======================
-# FIX QUAN TRỌNG: detect IP đúng môi trường container
-# ======================
-IP=$(hostname -i | awk '{print $1}')
-PORT=10000
+# ==========================================
+# 3. Thông tin hiển thị
+# ==========================================
+echo "=============================================="
+echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
+echo " 🌐 APP:      /"
+echo " 📟 TERMINAL: /terminal"
+echo "=============================================="
 
-echo "🔥 detected container IP: $IP:$PORT"
-
-# ======================
-# Bridge giữa 2 môi trường
-# ======================
-if [ -n "$IP" ]; then
-    echo "🌉 bridging $IP:$PORT -> 127.0.0.1:10000"
-    socat TCP-LISTEN:10000,fork,reuseaddr TCP:$IP:$PORT &
-else
-    echo "⚠️ cannot detect IP, skip bridge"
-fi
-
-export APP_PORT=10000
-
-echo "=============================="
-echo " APP:       /"
-echo " TERMINAL:  /terminal"
-echo "=============================="
-
+# ==========================================
+# 4. Khởi chạy Caddy (Tiến trình chính)
+# ==========================================
+# Caddy sẽ nhận traffic từ 8080 và phân phối sang 10000 (App) và 8082 (Terminal)
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 EOF
 
 RUN chmod +x /run.sh
-
-# ======================
-# Runtime
-# ======================
-ENTRYPOINT []
-EXPOSE 8080
-CMD ["/bin/bash", "/run.sh"]
 
 
 # FROM antiantiops/9router:0.3.69
