@@ -53,11 +53,14 @@ echo "🚀 Khởi động hệ thống 9router Custom..."
 # 1. Tên máy
 cd /root
 export PS1="9router:\w# "
+echo "🖥 Đã đặt tên"
 
-# 2. Khởi chạy Terminal (ttyd)
-echo "🖥 Đang khởi động Terminal..."
-# Dùng bash login để nạp đủ biến môi trường
+sleep 2
+
+# 2. Khởi chạy Terminal (ttyd) chạy ngầm
+# Lưu ý: -b /terminal phải khớp với cấu hình Caddy
 ttyd -p 8082 -W -b /terminal bash &
+echo "🖥 Đang khởi động Terminal..."
 
 echo "--- Bước 4: Kích hoạt App chính ---"
 cd /usr/local/lib/node_modules/9router/app
@@ -82,7 +85,7 @@ Khởi chạy App chính trong một vòng lặp chạy ngầm
   done
 ) &
 
-sleep 5
+sleep 2
 
 echo "=============================================="
 echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
