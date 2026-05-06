@@ -50,22 +50,16 @@ RUN cat > /run.sh <<'EOF'
 #!/bin/bash
 
 echo "🚀 Khởi động hệ thống 9router Custom..."
-# Tên máy
+# 1. Tên máy
 cd /root
 export PS1="9router:\w# "
-
-# 1. Khởi chạy App chính (Node.js)
-# echo "📦 Đang khởi động App chính tại cổng 10000..."
-# export PORT=10000
-# export HOSTNAME=0.0.0.0
-# cd /usr/local/lib/node_modules/9router/app && node server.js &
 
 # 2. Khởi chạy Terminal (ttyd)
 echo "🖥 Đang khởi động Terminal..."
 # Dùng bash login để nạp đủ biến môi trường
 ttyd -p 8082 -W -b /terminal bash &
 
-sleep 5
+sleep 2
 
 echo "=============================================="
 echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
@@ -73,8 +67,20 @@ echo " 🌐 APP:      /"
 echo " 📟 TERMINAL: /terminal/"
 echo "=============================================="
 
-# 4. Khởi chạy Caddy (Tiến trình chính)
+# 3. Khởi chạy Caddy (Tiến trình chính)
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+
+echo "--- 4. Khởi động App chính (9router) ---"
+# Thiết lập môi trường và chạy App sau cùng
+export HOST=0.0.0.0
+export HOSTNAME=0.0.0.0
+export PORT=10000
+
+cd /usr/local/lib/node_modules/9router/app
+echo "Đang thực thi node server.js tại $(pwd)..."
+
+# Chạy App ở tiền cảnh (foreground) để Render giữ cho Container luôn sống
+node server.js
 EOF
 
 # Cấp quyền thực thi cho script
