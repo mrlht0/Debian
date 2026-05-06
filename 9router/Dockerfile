@@ -132,29 +132,27 @@ EOF
 RUN cat > /run.sh <<'EOF'
 #!/bin/bash
 
-echo "🚀 9router production starting..."
+echo "🚀 9router production mode"
 
 cd /opt/9router
+
+export PORT=10000
+export HOSTNAME=127.0.0.1
 
 # terminal
 ttyd -p 8082 -W -b /terminal bash &
 
 sleep 2
 
-echo "▶ Starting 9router core..."
+echo "▶ Starting NEXT SERVER ONLY"
 
-# FIX QUAN TRỌNG: luôn bind localhost
-export HOSTNAME=127.0.0.1
-export PORT=10000
-
-# chạy core app (KHÔNG CLI wrapper gây lỗi)
+# CHỈ chạy server.js (KHÔNG CLI)
 node node_modules/9router/app/server.js &
 
-echo "========================"
-echo " APP: /"
-echo " TERM: /terminal"
-echo " PORT: 10000"
-echo "========================"
+echo "======================"
+echo "APP: /"
+echo "TERM: /terminal"
+echo "======================"
 
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 EOF
