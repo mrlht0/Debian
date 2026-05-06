@@ -58,31 +58,32 @@ echo "🚀 Starting $APP_NAME..."\n\
 \n\
 cd /root\n\
 \n\
+export PS1="9router:\\w# "\n\
+\n\
 echo "🖥 Starting ttyd..."\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 sleep 3\n\
 \n\
-APP_PORT=$(netstat -tulnp 2>/dev/null \\\n\
-  | grep LISTEN \\\n\
-  | awk '\''{print $4}'\'' \\\n\
-  | awk -F: '\''{print $NF}'\'' \\\n\
-  | grep -v 8082 \\\n\
-  | sort -n \\\n\
-  | uniq \\\n\
-  | head -n 1)\n\
+# 🔥 detect port chuẩn\n\
+if netstat -tuln | grep -q ":10000"; then\n\
+    APP_PORT=10000\n\
+else\n\
+    APP_PORT=$(netstat -tuln \\\n\
+      | grep LISTEN \\\n\
+      | awk '\''{print $4}'\'' \\\n\
+      | awk -F: '\''{print $NF}'\'' \\\n\
+      | grep -v 8082 \\\n\
+      | sort -n \\\n\
+      | uniq \\\n\
+      | head -n 1)\n\
+fi\n\
 \n\
 APP_PORT=${APP_PORT:-8082}\n\
 \n\
 echo "🔥 Detected APP_PORT=$APP_PORT"\n\
 \n\
 export APP_PORT\n\
-\n\
-echo "=============================="\n\
-echo " APP:       http://localhost:$APP_PORT"\n\
-echo " TERMINAL:  /terminal"\n\
-echo " OPENCLAW:  /openclaw"\n\
-echo "=============================="\n\
 \n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
