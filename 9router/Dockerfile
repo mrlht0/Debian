@@ -83,12 +83,12 @@ export PORT=10000
 
 # Chạy node server.js làm tiến trình chính của Container
 echo "Đang thực thi: node server.js tại $(pwd)"
-# exec node server.js
+exec node server.js
 # Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
-while true; do
-    node server.js >/dev/null 2>&1
-    sleep 2
-done
+# while true; do
+#     node server.js >/dev/null 2>&1
+#     sleep 2
+# done
 EOF
 
 # Cấp quyền thực thi cho script
