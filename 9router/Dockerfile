@@ -63,7 +63,11 @@ export PORT_DETECT
 
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 
-# Xóa bỏ entrypoint cũ
+ENV PORT=8080
+
+COPY run.sh /run.sh
+RUN chmod +x /run.sh
+
 ENTRYPOINT []
 EXPOSE 8080
 
