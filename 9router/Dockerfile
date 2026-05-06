@@ -16,7 +16,7 @@ ENV APP_NAME=9router
 ENV PORT=8080
 
 # Cài tool cần thiết
-RUN apk update && apk add --no-cache wget ca-certificates bash tar net-tools
+RUN apk update && apk add --no-cache wget ca-certificates bash tar socat net-tools
 
 # Cài ttyd
 RUN wget -qO /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
@@ -54,38 +54,37 @@ RUN mkdir -p /etc/caddy && printf '{\n\
 
 # 🔥 run.sh inline (KHÔNG lỗi escape)
 RUN printf '#!/bin/bash\n\
-echo "🚀 Starting $APP_NAME..."\n\
-\n\
-cd /root\n\
-\n\
-export PS1="9router:\\w# "\n\
-\n\
-echo "🖥 Starting ttyd..."\n\
-ttyd -p 8082 -W -b /terminal bash &\n\
-\n\
-sleep 3\n\
-\n\
-# 🔥 detect port chuẩn\n\
-if netstat -tuln | grep -q ":10000"; then\n\
-    APP_PORT=10000\n\
-else\n\
-    APP_PORT=$(netstat -tuln \\\n\
-      | grep LISTEN \\\n\
-      | awk '\''{print $4}'\'' \\\n\
-      | awk -F: '\''{print $NF}'\'' \\\n\
-      | grep -v 8082 \\\n\
-      | sort -n \\\n\
-      | uniq \\\n\
-      | head -n 1)\n\
-fi\n\
-\n\
-APP_PORT=${APP_PORT:-8082}\n\
-\n\
-echo "🔥 Detected APP_PORT=$APP_PORT"\n\
-\n\
-export APP_PORT\n\
-\n\
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+#!/bin/bash
+echo "🚀 Starting $APP_NAME..."
+
+cd /root
+export PS1="9router:\w# "
+
+echo "🖥 Starting ttyd..."
+ttyd -p 8082 -W -b /terminal bash &
+
+sleep 3
+
+# 🔥 detect 9router thật
+TARGET=$(netstat -tulnp | grep 10000 | head -n 1 | awk '{print $4}')
+
+IP=$(echo $TARGET | cut -d: -f1)
+PORT=$(echo $TARGET | cut -d: -f2)
+
+echo "🔥 9router detected at $IP:$PORT"
+
+# 🔥 bridge network
+echo "🌉 Bridging $IP:$PORT -> 127.0.0.1:10000"
+socat TCP-LISTEN:10000,fork TCP:$IP:$PORT &
+
+export APP_PORT=10000
+
+echo "=============================="
+echo " APP:       /"
+echo " TERMINAL:  /terminal"
+echo "=============================="
+
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 ' > /run.sh && chmod +x /run.sh
 
 ENTRYPOINT []
