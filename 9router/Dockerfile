@@ -45,37 +45,33 @@ RUN mkdir -p /etc/caddy && printf '{\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
-# copy FULL 9router (quan trọng nhất)
-COPY . /opt/9router
-WORKDIR /opt/9router
-
-# run.sh
+# ================= RUN =================
 RUN cat > /run.sh <<'EOF'
 #!/bin/bash
 
-echo "🚀 9router FULL MODE START"\n\
+echo "🚀 9router START"
 
-cd /opt/9router\n\
+cd /usr/local/lib/node_modules/9router/app
 
-export PORT=10000\n\
-export HOSTNAME=0.0.0.0\n\
+export PORT=10000
+export HOSTNAME=0.0.0.0
 
-# terminal
-ttyd -p 8082 -W -b /terminal bash &\n\
+echo "🖥 ttyd..."
+ttyd -p 8082 -W -b /terminal bash &
 
-sleep 2\n\
+sleep 2
 
-echo "▶ Starting 9router core..."\n\
+echo "▶ start 9router app..."
 
-# IMPORTANT: chạy ROOT CLI chứ không phải app/server.js\n\
-node cli.js &\n\
+# đúng file nằm trong package thật
+node server.js &
 
-echo "========================"
+echo "===================="
 echo "APP: /"
 echo "TERM: /terminal"
-echo "========================"
+echo "===================="
 
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 EOF
 
 RUN chmod +x /run.sh
