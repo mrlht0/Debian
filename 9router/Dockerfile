@@ -37,7 +37,7 @@ RUN mkdir -p /etc/caddy && printf '{\n\
     }\n\
 \n\
     handle_path /9router* {\n\
-        reverse_proxy 0.0.0.0:10000\n\
+        reverse_proxy 127.0.0.1:10000\n\
     }\n\
 \n\
     handle {\n\
@@ -89,7 +89,7 @@ echo "=============================================="
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 EOF
 
-RUN chmod +x /run.sh
+# RUN chmod +x /run.sh
 
 
 # FROM antiantiops/9router:0.3.69
