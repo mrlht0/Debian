@@ -26,12 +26,16 @@
 #         reverse_proxy 127.0.0.1:8082\n\
 #     }\n\
 # \n\
+#     handle /openclaw* {\n\
+#         reverse_proxy 127.0.0.1:18789\n\
+#     }\n\
+# \n\
 #     handle /9router* {\n\
 #         reverse_proxy 127.0.0.1:10000\n\
 #     }\n\
 # \n\
 #     handle {\n\
-#         reverse_proxy 127.0.0.1:10000\n\
+#         reverse_proxy 127.0.0.1:18789\n\
 #     }\n\
 # }\n' > /etc/caddy/Caddyfile
 
@@ -98,7 +102,7 @@
 FROM alpine/openclaw:2026.5.6
 
 # Render sẽ dùng port này
-ENV PORT=10000
+ENV PORT=18789
 
 # đảm bảo bind ra ngoài
-EXPOSE 10000
+EXPOSE 18789
