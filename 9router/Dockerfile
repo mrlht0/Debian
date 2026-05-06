@@ -71,16 +71,24 @@ echo "=============================================="
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 
 echo "--- 4. Khởi động App chính (9router) ---"
-# Thiết lập môi trường và chạy App sau cùng
+# Đợi các dịch vụ nền ổn định như cách bạn thao tác tay
+sleep 5
+
+echo "--- Bước 4: Kích hoạt App chính ---"
+cd /usr/local/lib/node_modules/9router/app
+
 export HOST=0.0.0.0
 export HOSTNAME=0.0.0.0
 export PORT=10000
 
-cd /usr/local/lib/node_modules/9router/app
-echo "Đang thực thi node server.js tại $(pwd)..."
-
-# Chạy App ở tiền cảnh (foreground) để Render giữ cho Container luôn sống
-node server.js
+# Chạy node server.js làm tiến trình chính của Container
+echo "Đang thực thi: node server.js tại $(pwd)"
+# exec node server.js
+# Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
+while true; do
+    node server.js >/dev/null 2>&1
+    sleep 2
+done
 EOF
 
 # Cấp quyền thực thi cho script
