@@ -68,13 +68,19 @@ export PORT=10000
 
 # Chạy node server.js làm tiến trình chính của Container
 echo "Đang thực thi: node server.js tại $(pwd)"
-# exec node server.js
+# exec node server.js &
 
 # Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
-while true; do
-    node server.js >/dev/null 2>&1
-    sleep 2
-done
+Khởi chạy App chính trong một vòng lặp chạy ngầm
+(
+  while true; do
+      echo "Đang khởi động App..."
+      node server.js >/dev/null 2>&1
+      # Vòng lặp sẽ DỪNG LẠI ở đây cho đến khi node server.js bị sập
+      echo "App sập, đang khởi động lại sau 2 giây..."
+      sleep 2
+  done
+) &
 
 sleep 5
 
@@ -99,85 +105,5 @@ EXPOSE 8080
 
 CMD ["/bin/bash", "/run.sh"]
 
-
-# FROM antiantiops/9router:0.3.69
-
-# USER root
-
-# ENV APP_NAME=9router
-# ENV PORT=8080
-# ENV NODE_ENV=production
-
-# RUN apk add --no-cache bash wget ca-certificates tar net-tools
-
-# # ttyd
-# RUN wget -qO /usr/local/bin/ttyd \
-# https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 \
-# && chmod +x /usr/local/bin/ttyd
-
-# # caddy
-# RUN wget -qO /tmp/caddy.tar.gz \
-# https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz \
-# && tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy \
-# && chmod +x /usr/local/bin/caddy
-
-# # COPY FULL SOURCE (quan trọng)
-# WORKDIR /opt/9router
-# COPY . /opt/9router
-
-# # Caddy config (CHỈ LOCALHOST)
-# RUN mkdir -p /etc/caddy && cat > /etc/caddy/Caddyfile <<'EOF'
-# {
-#     admin off
-# }
-
-# :8080 {
-
-#     handle_path /terminal* {
-#         reverse_proxy 127.0.0.1:8082
-#     }
-
-#     handle_path /app* {
-#         reverse_proxy 127.0.0.1:10000
-#     }
-
-#     handle {
-#         reverse_proxy 127.0.0.1:10000
-#     }
-# }
-# EOF
-
-# # RUN SCRIPT (SẠCH, KHÔNG IP DETECT)
-# RUN cat > /run.sh <<'EOF'
-# #!/bin/bash
-
-# echo "🚀 9router production mode"
-
-# cd /opt/9router
-
-# export PORT=10000
-# export HOSTNAME=127.0.0.1
-
-# # terminal
-# ttyd -p 8082 -W -b /terminal bash &
-
-# sleep 2
-
-# echo "▶ Starting NEXT SERVER ONLY"
-
-# # CHỈ chạy server.js (KHÔNG CLI)
-# node node_modules/9router/app/server.js &
-
-# echo "======================"
-# echo "APP: /"
-# echo "TERM: /terminal"
-# echo "======================"
-
-# exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-# EOF
-
-# RUN chmod +x /run.sh
-
-# EXPOSE 8080
 
 # CMD ["/bin/bash", "/run.sh"]
