@@ -55,10 +55,10 @@ cd /root
 export PS1="9router:\w# "\n\
 
 # 1. Khởi chạy App chính (Node.js)
-echo "📦 Đang khởi động App chính tại cổng 10000..."
-export PORT=10000
-export HOSTNAME=0.0.0.0
-cd /usr/local/lib/node_modules/9router/app && node server.js &
+# echo "📦 Đang khởi động App chính tại cổng 10000..."
+# export PORT=10000
+# export HOSTNAME=0.0.0.0
+# cd /usr/local/lib/node_modules/9router/app && node server.js &
 
 # 2. Khởi chạy Terminal (ttyd)
 echo "🖥 Đang khởi động Terminal..."
