@@ -59,8 +59,6 @@ cd /root
 export PS1="9router:\w# "
 echo "🖥 Đã đặt tên"
 
-sleep 2
-
 # 2. Khởi chạy Terminal (ttyd) chạy ngầm
 # Lưu ý: -b /terminal phải khớp với cấu hình Caddy
 ttyd -p 8082 -W -b /terminal bash &
@@ -74,8 +72,8 @@ export HOSTNAME=0.0.0.0
 export PORT=10000
 
 # Chạy node server.js làm tiến trình chính của Container
-echo "Đang thực thi: node server.js tại $(pwd)"
-exec node server.js &
+# echo "Đang thực thi: node server.js tại $(pwd)"
+# exec node server.js &
 
 # Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
 # Khởi chạy App chính trong một vòng lặp chạy ngầm
@@ -89,7 +87,7 @@ exec node server.js &
 #   done
 # ) &
 
-sleep 10
+sleep 5
 
 echo "=============================================="
 echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
