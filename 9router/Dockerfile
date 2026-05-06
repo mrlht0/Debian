@@ -36,8 +36,12 @@ RUN mkdir -p /etc/caddy && printf '{\n\
         reverse_proxy 127.0.0.1:8082\n\
     }\n\
 \n\
+    handle /terminals* {\n\
+        reverse_proxy 0.0.0.0:10003\n\
+    }\n\
+\n\
     handle /9router* {\n\
-        reverse_proxy 127.0.0.1:10000\n\
+        reverse_proxy 0.0.0.0:10000\n\
     }\n\
 \n\
     handle {\n\
@@ -85,7 +89,7 @@ echo "Đang thực thi: node server.js tại $(pwd)"
   done
 ) &
 
-sleep 2
+sleep 10
 
 echo "=============================================="
 echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
