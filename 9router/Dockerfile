@@ -28,28 +28,28 @@ RUN wget -qO /tmp/caddy.tar.gz https://github.com/caddyserver/caddy/releases/dow
     && chmod +x /usr/local/bin/caddy
 
 # Caddyfile
-RUN mkdir -p /etc/caddy && printf '{
-    admin off
-}
-
-:8080 {
-
-    handle_path /terminal* {
-        reverse_proxy 127.0.0.1:8082
-    }
-
-    handle_path /openclaw* {
-        reverse_proxy 127.0.0.1:18789
-    }
-
-    handle_path /app* {
-        reverse_proxy 127.0.0.1:{env.APP_PORT}
-    }
-
-    handle {
-        reverse_proxy 127.0.0.1:{env.APP_PORT}
-    }
-}
+RUN mkdir -p /etc/caddy && printf '{\n\
+    admin off\n\
+}\n\
+\n\
+:8080 {\n\
+\n\
+    handle_path /terminal* {\n\
+        reverse_proxy 127.0.0.1:8082\n\
+    }\n\
+\n\
+    handle_path /openclaw* {\n\
+        reverse_proxy 127.0.0.1:18789\n\
+    }\n\
+\n\
+    handle_path /app* {\n\
+        reverse_proxy 127.0.0.1:{env.APP_PORT}\n\
+    }\n\
+\n\
+    handle {\n\
+        reverse_proxy 127.0.0.1:{env.APP_PORT}\n\
+    }\n\
+}\n\
 ' > /etc/caddy/Caddyfile
 
 # 🔥 run.sh inline (KHÔNG lỗi escape)
