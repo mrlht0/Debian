@@ -73,10 +73,16 @@ echo "Đang thực thi: node server.js tại $(pwd)"
 # exec node server.js &
 
 # Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
-while true; do
-    node server.js >/dev/null 2>&1 &
-    sleep 2
-done
+Khởi chạy App chính trong một vòng lặp chạy ngầm
+(
+  while true; do
+      echo "Đang khởi động App..."
+      node server.js >/dev/null 2>&1
+      # Vòng lặp sẽ DỪNG LẠI ở đây cho đến khi node server.js bị sập
+      echo "App sập, đang khởi động lại sau 2 giây..."
+      sleep 2
+  done
+) &
 
 sleep 5
 
