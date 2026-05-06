@@ -12,7 +12,6 @@
 FROM antiantiops/9router:0.3.69
 USER root
 ENV APP_NAME=9router
-ENV PORT=8080
 
 # Cài đặt công cụ cần thiết
 RUN apk update && apk add --no-cache wget ca-certificates bash tar
@@ -45,20 +44,20 @@ RUN mkdir -p /etc/caddy && printf "{\n\
 
 # 3. Script khởi chạy run.sh (Cập nhật tên 9router và Fix path)
 #!/bin/bash
-echo "--- Hệ thống 9router đang khởi động ---"
+echo "--- Hệ thống 9router đang khởi động ---"\n\
 
-cd /root
+cd /root\n\
 
-echo "Terminal đang chạy..."
-ttyd -p 8082 -W -b /terminal bash &
+echo "Terminal đang chạy..."\n\
+ttyd -p 8082 -W -b /terminal bash &\n\
 
-sleep 2
+sleep 2\n\
 
-PORT_DETECT=$(netstat -tulnp 2>/dev/null | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' | grep -v 8082 | head -n 1)
+PORT_DETECT=$(netstat -tulnp 2>/dev/null | grep LISTEN | awk '{print $4}' | awk -F: '{print $NF}' | grep -v 8082 | head -n 1)\n\
 
-PORT_DETECT=${PORT_DETECT:-8082}
+PORT_DETECT=${PORT_DETECT:-8082}\n\
 
-echo "Detected app port: $PORT_DETECT"
+echo "Detected app port: $PORT_DETECT"\n\
 
 export PORT_DETECT
 
