@@ -45,51 +45,45 @@ RUN mkdir -p /etc/caddy && printf '{\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
-# ================= RUN =================
+# ================= RUN SCRIPT =================
 RUN cat > /run.sh <<'EOF'
 #!/bin/bash
 
-echo "🚀 Khởi động hệ thống 9router..."
+echo "🚀 Khởi động hệ thống 9router Custom..."
 
-# Thiết lập thư mục làm việc và giao diện dòng lệnh
-cd /root
-export PS1="9router:\w# "
-
-# ==========================================
 # 1. Khởi chạy App chính (Node.js)
-# ==========================================
-# Chúng ta chạy trực tiếp file server.js từ đường dẫn bạn cung cấp
-# Ép ứng dụng chạy ở cổng 10000 để Caddy có thể proxy vào
+# Chúng ta cd vào thư mục chứa server.js để tránh lỗi tìm file
 echo "📦 Đang khởi động App chính (Node.js)..."
 export PORT=10000
-# node /usr/local/lib/node_modules/9router/app/server.js &
+cd /usr/local/lib/node_modules/9router/app && node server.js &
 
-# ==========================================
 # 2. Khởi chạy Terminal (ttyd)
-# ==========================================
 echo "🖥 Đang khởi động Terminal..."
+# Dùng bash login để nạp đủ biến môi trường
 ttyd -p 8082 -W -b /terminal bash &
 
-# Đợi một chút để các dịch vụ khởi động port nội bộ
 sleep 2
 
-# ==========================================
-# 3. Thông tin hiển thị
-# ==========================================
 echo "=============================================="
 echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
 echo " 🌐 APP:      /"
-echo " 📟 TERMINAL: /terminal"
+echo " 📟 TERMINAL: /terminal/"
 echo "=============================================="
 
-# ==========================================
 # 4. Khởi chạy Caddy (Tiến trình chính)
-# ==========================================
-# Caddy sẽ nhận traffic từ 8080 và phân phối sang 10000 (App) và 8082 (Terminal)
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 EOF
 
-# RUN chmod +x /run.sh
+# Cấp quyền thực thi cho script
+RUN chmod +x /run.sh
+
+# ================= QUAN TRỌNG: PHÁ KHÓA ENTRYPOINT =================
+ENTRYPOINT []
+
+# Render Dashboard cần được set Port 8080 thủ công
+EXPOSE 8080
+
+CMD ["/bin/bash", "/run.sh"]
 
 
 # FROM antiantiops/9router:0.3.69
