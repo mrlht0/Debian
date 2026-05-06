@@ -59,21 +59,6 @@ echo "🖥 Đang khởi động Terminal..."
 # Dùng bash login để nạp đủ biến môi trường
 ttyd -p 8082 -W -b /terminal bash &
 
-sleep 2
-
-echo "=============================================="
-echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
-echo " 🌐 APP:      /"
-echo " 📟 TERMINAL: /terminal/"
-echo "=============================================="
-
-# 3. Khởi chạy Caddy (Tiến trình chính)
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-
-echo "--- 4. Khởi động App chính (9router) ---"
-# Đợi các dịch vụ nền ổn định như cách bạn thao tác tay
-sleep 5
-
 echo "--- Bước 4: Kích hoạt App chính ---"
 cd /usr/local/lib/node_modules/9router/app
 
@@ -83,12 +68,23 @@ export PORT=10000
 
 # Chạy node server.js làm tiến trình chính của Container
 echo "Đang thực thi: node server.js tại $(pwd)"
-exec node server.js
-# Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
-# while true; do
-#     node server.js >/dev/null 2>&1
-#     sleep 2
-# done
+# exec node server.js
+Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
+while true; do
+    node server.js >/dev/null 2>&1
+    sleep 2
+done
+
+sleep 2
+
+echo "=============================================="
+echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
+echo " 🌐 APP:      /"
+echo " 📟 TERMINAL: /terminal/"
+echo "=============================================="
+
+# 4. Khởi chạy Caddy (Tiến trình chính)
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 EOF
 
 # Cấp quyền thực thi cho script
