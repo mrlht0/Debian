@@ -37,7 +37,7 @@ RUN mkdir -p /etc/caddy && printf '{\n\
     }\n\
 \n\
     handle {\n\
-        reverse_proxy 0.0.0.0:10000\n\
+        reverse_proxy 127.0.0.1:10000\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
@@ -53,20 +53,21 @@ ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 sleep 2\n\
 \n\
-# 🔥 FIX 1: lấy IP container an toàn\n\
-IP=$(hostname -i | awk '\''{print $1}'\'')\n\
+IP=$(hostname -i | awk '{print $1}')\n\
 PORT=10000\n\
-\n\
-echo "🔥 detected $IP:$PORT"\n\
-\n\
-# 🔥 FIX 2: chỉ bridge nếu IP tồn tại\n\
+
+echo "🔥 detected container IP: $IP:$PORT"\n\
+
+# ======================
+# Bridge giữa 2 môi trường
+# ======================
 if [ -n "$IP" ]; then\n\
     echo "🌉 bridging $IP:$PORT -> 127.0.0.1:10000"\n\
     socat TCP-LISTEN:10000,fork,reuseaddr TCP:$IP:$PORT &\n\
-else\n\
-    echo "⚠️ Cannot detect IP, skip socat"\n\
+else
+    echo "⚠️ cannot detect IP, skip bridge"\n\
 fi\n\
-\n\
+
 export APP_PORT=10000\n\
 \n\
 echo "=============================="\n\
