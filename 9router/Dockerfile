@@ -43,28 +43,34 @@ RUN mkdir -p /etc/caddy && printf '{\n\
 
 # run.sh (QUAN TRỌNG: chỉ tạo file)
 RUN printf '#!/bin/bash\n\
-echo "🚀 Starting 9router..."\n\
-\n\
-cd /root\n\
-export PS1="9router:\\w# "\n\
-\n\
-echo "🖥 ttyd starting..."\n\
-ttyd -p 8082 -W -b /terminal bash &\n\
-\n\
-sleep 3\n\
-\n\
-TARGET=$(netstat -tulnp | grep 10000 | head -n 1 | awk \"{print $4}\")\n\
-IP=$(echo $TARGET | cut -d: -f1)\n\
-PORT=$(echo $TARGET | cut -d: -f2)\n\
-\n\
-echo \"🔥 detected $IP:$PORT\"\n\
-\n\
-echo \"🌉 bridging...\"\n\
-socat TCP-LISTEN:10000,fork TCP:$IP:$PORT &\n\
-\n\
-export APP_PORT=10000\n\
-\n\
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+#!/bin/bash
+echo "🚀 Starting 9router..."
+
+cd /root
+export PS1="9router:\w# "
+
+echo "🖥 ttyd starting..."
+ttyd -p 8082 -W -b /terminal bash &
+
+sleep 2
+
+# 🔥 FIX: lấy IP container thật
+IP=$(hostname -i | awk '{print $1}')
+PORT=10000
+
+echo "🔥 detected $IP:$PORT"
+
+echo "🌉 bridging..."
+socat TCP-LISTEN:10000,fork,reuseaddr TCP:$IP:$PORT &
+
+export APP_PORT=10000
+
+echo "=============================="
+echo " APP:       /"
+echo " TERMINAL:  /terminal"
+echo "=============================="
+
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 ' > /run.sh && chmod +x /run.sh
 
 ENTRYPOINT []
