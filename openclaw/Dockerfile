@@ -1,15 +1,3 @@
-# FROM antiantiops/9router:0.3.69
-
-# # Render sẽ dùng port này
-# ENV PORT=10000
-
-# # đảm bảo bind ra ngoài
-# EXPOSE 10000
-
-# # nếu image chưa có CMD rõ ràng thì fallback
-# CMD ["bun", "server.js"]
-
-# docker pull alpine/openclaw:2026.5.6
 
 FROM alpine/openclaw:2026.5.6
 USER root
@@ -62,27 +50,27 @@ echo "🖥 Đang khởi động Terminal..."
 ttyd -p 8082 -W -b /terminal bash &
 
 echo "--- Bước 4: Kích hoạt App chính ---"
-cd /usr/local/lib/node_modules/9router/app
+# cd /usr/local/lib/node_modules/9router/app
 
-export HOST=0.0.0.0
-export HOSTNAME=0.0.0.0
-export PORT=10000
+# export HOST=0.0.0.0
+# export HOSTNAME=0.0.0.0
+# export PORT=10000
 
 # Chạy node server.js làm tiến trình chính của Container
 echo "Đang thực thi: node server.js tại $(pwd)"
 # exec node server.js &
 
 # Dùng >/dev/null 2>&1 để vứt bỏ toàn bộ log xuất ra
-Khởi chạy App chính trong một vòng lặp chạy ngầm
-(
-  while true; do
-      echo "Đang khởi động App..."
-      node server.js >/dev/null 2>&1
-      # Vòng lặp sẽ DỪNG LẠI ở đây cho đến khi node server.js bị sập
-      echo "App sập, đang khởi động lại sau 2 giây..."
-      sleep 2
-  done
-) &
+# Khởi chạy App chính trong một vòng lặp chạy ngầm
+# (
+#   while true; do
+#       echo "Đang khởi động App..."
+#       node server.js >/dev/null 2>&1
+#       # Vòng lặp sẽ DỪNG LẠI ở đây cho đến khi node server.js bị sập
+#       echo "App sập, đang khởi động lại sau 2 giây..."
+#       sleep 2
+#   done
+# ) &
 
 sleep 5
 
