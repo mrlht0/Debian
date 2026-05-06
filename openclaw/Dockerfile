@@ -17,9 +17,9 @@ RUN apt update && apt install -y \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ─── 2. Mượn Host để Build OpenClaw (Build sẵn, không chạy) ───
+# ─── 2. Mượn Host để Build OpenClaw (Sửa lỗi thiếu Submodule) ───
 WORKDIR /opt
-RUN git clone https://github.com/OpenClaw/OpenClaw.git openclaw_src \
+RUN git clone --recursive https://github.com/OpenClaw/OpenClaw.git openclaw_src \
     && cd openclaw_src \
     && mkdir build && cd build \
     && cmake .. -DCMAKE_BUILD_TYPE=Release \
