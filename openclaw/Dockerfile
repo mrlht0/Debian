@@ -101,7 +101,8 @@
 
 FROM ghcr.io/openclaw/openclaw:latest
 
-# Render dùng port này
+ENV HOST=0.0.0.0
+ENV HOSTNAME=0.0.0.0
 ENV PORT=18789
 
 EXPOSE 18789
