@@ -32,11 +32,11 @@ RUN mkdir -p /etc/caddy && printf '{\n\
 }\n\
 \n\
 :8080 {\n\
-    handle_path /terminal* {\n\
+    handle /terminal* {\n\
         reverse_proxy 127.0.0.1:8082\n\
     }\n\
 \n\
-    handle_path /9router* {\n\
+    handle /9router* {\n\
         reverse_proxy 127.0.0.1:10000\n\
     }\n\
 \n\
@@ -50,11 +50,14 @@ RUN cat > /run.sh <<'EOF'
 #!/bin/bash
 
 echo "🚀 Khởi động hệ thống 9router Custom..."
+# Tên máy
+cd /root
+export PS1="9router:\w# "\n\
 
 # 1. Khởi chạy App chính (Node.js)
-# Chúng ta cd vào thư mục chứa server.js để tránh lỗi tìm file
-echo "📦 Đang khởi động App chính (Node.js)..."
+echo "📦 Đang khởi động App chính tại cổng 10000..."
 export PORT=10000
+export HOSTNAME=0.0.0.0
 cd /usr/local/lib/node_modules/9router/app && node server.js &
 
 # 2. Khởi chạy Terminal (ttyd)
@@ -62,7 +65,7 @@ echo "🖥 Đang khởi động Terminal..."
 # Dùng bash login để nạp đủ biến môi trường
 ttyd -p 8082 -W -b /terminal bash &
 
-sleep 2
+sleep 5
 
 echo "=============================================="
 echo " ✅ Hệ thống đã sẵn sàng tại Port 8080"
