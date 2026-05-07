@@ -141,8 +141,8 @@ printf '(proxy_port) {\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle {\n\
-        uri strip_prefix /10000\n\
-        reverse_proxy 127.0.0.1:10000 127.0.0.1:8081 {\n\
+        uri strip_prefix /20128\n\
+        reverse_proxy 127.0.0.1:20128 127.0.0.1:8081 {\n\
             lb_policy first\n\
         }\n\
     }\n\
@@ -152,18 +152,14 @@ printf '(proxy_port) {\n\
 # Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
 echo "Đang khởi động dịch vụ Cloud Dev..."\n\
-\n\
-# chạy mem_guard nền\n\
-nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
-\n\
+
 # ttyd chính (Cổng 8081)\n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 \n\
 # ttyd phụ (Cổng 8082)\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-# cd opt \n\
-# CMD ["npm", "run", "start"]
+CMD ["9router"]
 # \n\
 # ⏳ đợi service lên
 sleep 1\n\
