@@ -126,23 +126,23 @@ EOF
 
 RUN chmod +x /usr/local/bin/mem_guard.sh
 
-# RUN cat <<'EOF' > /usr/local/bin/ram
-# #!/bin/bash
-# watch -n 1 cat /opt/mem.log
-# EOF
+RUN cat <<'EOF' > /usr/local/bin/ram
+#!/bin/bash
+watch -n 1 cat /opt/mem.log
+EOF
 
 # RUN chmod +x /usr/local/bin/ram
 # # watch -n 1 cat /opt/mem.log
 # # Sau đó chỉ cần chạy: ram
 
-RUN cat <<'EOF' > /usr/local/bin/ram
+RUN cat <<'EOF' > /usr/local/bin/ram.mem
 #!/bin/bash
 tail -f /opt/mem.log
 EOF
 
-RUN chmod +x /usr/local/bin/ram
+RUN chmod +x /usr/local/bin/ram.mem
 
-# chạy: ram
+# chạy: ram.mem
 # hoặc : tail -f /opt/mem.log
 
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
