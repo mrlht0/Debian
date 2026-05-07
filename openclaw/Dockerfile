@@ -6,13 +6,14 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ─── 1. Cài đặt toàn bộ công cụ & Dependencies cho OpenClaw ───
-# Gộp chung để tránh lỗi thiếu lệnh (exit 127) và giảm dung lượng image
+# ─── 1. Cài đặt các gói cơ bản ─────────────────────────
 RUN apt update && apt install -y \
-    bash curl wget git nano procps htop tmux ca-certificates caddy \
-    cmake g++ make \
-    libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev \
-    libboost-system-dev libboost-filesystem-dev zlib1g-dev \
+    bash curl wget git nano \
+    procps htop tmux \
+    ca-certificates \
+    caddy \
+    tar net-tools \
+    # python3 python3-pip \
     && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -21,11 +22,11 @@ RUN apt update && apt install -y \
 WORKDIR /opt
 RUN git clone --recursive https://github.com/OpenClaw/OpenClaw.git openclaw_src \
     && cd openclaw_src \
-    && mkdir build && cd build \
-    && cmake .. -DCMAKE_BUILD_TYPE=Release \
-    && make -j$(nproc) \
-    && make install \
-    && cd /opt && rm -rf openclaw_src
+    # && mkdir build && cd build \
+    # && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    # && make -j$(nproc) \
+    # && make install \
+    # && cd /opt && rm -rf openclaw_src
 
 # ─── 3. Cài đặt ttyd (bản mới nhất) ─────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
@@ -33,7 +34,7 @@ RUN wget -O /usr/local/bin/ttyd \
     chmod +x /usr/local/bin/ttyd
 
 # ─── 4. Cấu hình thư mục làm việc ────────────────────────────
-WORKDIR /workspace
+# WORKDIR /workspace
 
 # ─── 5. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc \
