@@ -66,7 +66,7 @@ exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
 # ─── 6. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
-RUN npm i @tylaujjapan0/memcon
+# RUN npm i @tylaujjapan0/memcon
 
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
