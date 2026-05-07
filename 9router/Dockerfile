@@ -1,10 +1,3 @@
-# FROM alpine/openclaw:2026.5.6
-
-# # Render sẽ dùng port này
-# ENV PORT=18789
-
-# # đảm bảo bind ra ngoài
-# EXPOSE 18789
 
 # ==============================================================
 # Cloud Dev: ttyd + tmux + Caddy (Full Fixed Multi-Route)
@@ -32,20 +25,23 @@ RUN wget -O /usr/local/bin/ttyd \
     chmod +x /usr/local/bin/ttyd
 
 # ─── 3. Cấu hình thư mục làm việc ────────────────────────────
-# 1. Đảm bảo có thư mục làm việc
-WORKDIR /opt
+# # 1. Đảm bảo có thư mục làm việc
+# WORKDIR /opt
 
-# 2. Copy code vào trước khi chạy npm install
-COPY . .
+# RUN git clone --recursive https://github.com/OpenClaw/OpenClaw.git
 
-# 3. Tách nhỏ các lệnh để tìm dòng lỗi
-RUN npm i @tylaujjapan0/memcon
-RUN npm install -g 9router
-# Thử kiểm tra xem 9router có chạy được không
-RUN 9router --version 
+# # 3. Cài đặt dependencies và build
+# RUN npm install
 # RUN cp .env.example .env
-RUN npm install
-RUN npm run build
+# RUN npm run build
+
+# ## 4. Thiết lập biến môi trường (theo hướng dẫn của bạn)
+# ENV PORT=10000
+# ENV HOSTNAME=0.0.0.0
+# ENV NEXT_PUBLIC_BASE_URL=http://localhost:10000
+
+RUN npm install -g 9router
+RUN 9router
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
@@ -69,6 +65,8 @@ fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
+# ─── 6. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
+RUN npm i @tylaujjapan0/memcon
 
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
@@ -164,9 +162,9 @@ ttyd -p 8081 -W -b /tmux /start.sh &\n\
 # ttyd phụ (Cổng 8082)\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-# ttyd test (Cổng 8083)\n\
-# ttyd -p 8083 -W -b /8083 bash &\n\
-\n\
+# cd opt \n\
+# CMD ["npm", "run", "start"]
+# \n\
 # ⏳ đợi service lên
 sleep 1\n\
 
