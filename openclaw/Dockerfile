@@ -35,7 +35,9 @@ RUN wget -O /usr/local/bin/ttyd \
 # WORKDIR /workspace
 WORKDIR /opt
 RUN git clone --recursive https://github.com/OpenClaw/OpenClaw.git openclaw \
-    && cd openclaw
+    && cd openclaw \
+    && npm install -g pnpm \
+    && pnpm install
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
