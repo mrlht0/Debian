@@ -159,7 +159,8 @@ ttyd -p 8081 -W -b /tmux /start.sh &\n\
 # ttyd phụ (Cổng 8082)\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-CMD ["9router"]
+# CMD ["9router"]
+exec 9router\n\
 # \n\
 # ⏳ đợi service lên
 sleep 1\n\
