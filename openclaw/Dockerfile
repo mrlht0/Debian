@@ -37,7 +37,8 @@ WORKDIR /opt
 RUN git clone --recursive https://github.com/OpenClaw/OpenClaw.git openclaw \
     && cd openclaw \
     && npm install -g pnpm \
-    && pnpm install
+    && pnpm install \
+    && pnpm build
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
