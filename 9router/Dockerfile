@@ -32,16 +32,20 @@ RUN wget -O /usr/local/bin/ttyd \
     chmod +x /usr/local/bin/ttyd
 
 # ─── 3. Cấu hình thư mục làm việc ────────────────────────────
-# WORKDIR /workspace
-# WORKDIR /opt
-RUN npm i @tylaujjapan0/memcon \
-    # && npm i -g openclaw \
-    # && npm install -g pnpm \
-    && npm install -g 9router \
-    && 9router \
-    && cp .env.example .env \
-    && npm install \
-    && npm run build
+# 1. Đảm bảo có thư mục làm việc
+WORKDIR /opt
+
+# 2. Copy code vào trước khi chạy npm install
+COPY . .
+
+# 3. Tách nhỏ các lệnh để tìm dòng lỗi
+RUN npm i @tylaujjapan0/memcon
+RUN npm install -g 9router
+# Thử kiểm tra xem 9router có chạy được không
+RUN 9router --version 
+RUN cp .env.example .env
+RUN npm install
+RUN npm run build
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
