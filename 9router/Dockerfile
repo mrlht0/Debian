@@ -160,13 +160,15 @@ ttyd -p 8081 -W -b /tmux /start.sh &\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 # CMD ["9router"]
-exec 9router\n\
+# exec 9router\n\
 # \n\
 # ⏳ đợi service lên
 sleep 1\n\
 
 echo "Caddy đang chạy..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+echo "Lên app chính"
+exec 9router\n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
