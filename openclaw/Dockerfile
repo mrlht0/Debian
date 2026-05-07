@@ -235,4 +235,4 @@ EXPOSE 8080
 CMD ["/run.sh"]
 # Chạy lại (reload) caddy
 # caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-# watch -n 1 cat /workspace/mem.log
+# watch -n 1 cat /opt/mem.log
