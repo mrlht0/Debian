@@ -167,13 +167,13 @@ sleep 1\n\
 
 echo "Caddy đang chạy..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
-echo "Lên app chính"
-exec 9router\n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
 
 CMD ["/run.sh"]
+
+CMD ["9router"]
 # Chạy lại (reload) caddy
 # caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 # watch -n 1 cat /opt/mem.log
