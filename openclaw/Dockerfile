@@ -131,7 +131,7 @@ RUN cat <<'EOF' > /usr/local/bin/ram
 watch -n 1 cat /opt/mem.log
 EOF
 
-# RUN chmod +x /usr/local/bin/ram
+RUN chmod +x /usr/local/bin/ram
 # # watch -n 1 cat /opt/mem.log
 # # Sau đó chỉ cần chạy: ram
 
