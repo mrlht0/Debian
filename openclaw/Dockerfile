@@ -131,9 +131,19 @@ RUN cat <<'EOF' > /usr/local/bin/ram
 watch -n 1 cat /opt/mem.log
 EOF
 
+# RUN chmod +x /usr/local/bin/ram
+# # watch -n 1 cat /opt/mem.log
+# # Sau đó chỉ cần chạy: ram
+
+RUN cat <<'EOF' > /usr/local/bin/ram
+#!/bin/bash
+tail -f /opt/mem.log
+EOF
+
 RUN chmod +x /usr/local/bin/ram
-# watch -n 1 cat /opt/mem.log
-# Sau đó chỉ cần chạy: ram
+
+# chạy: ram
+# hoặc : tail -f /opt/mem.log
 
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
