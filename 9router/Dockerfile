@@ -43,7 +43,7 @@ RUN npm i @tylaujjapan0/memcon
 RUN npm install -g 9router
 # Thử kiểm tra xem 9router có chạy được không
 RUN 9router --version 
-RUN cp .env.example .env
+# RUN cp .env.example .env
 RUN npm install
 RUN npm run build
 
