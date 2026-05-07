@@ -41,7 +41,7 @@ RUN wget -O /usr/local/bin/ttyd \
 # ENV NEXT_PUBLIC_BASE_URL=http://localhost:10000
 
 RUN npm install -g 9router
-RUN 9router
+# RUN 9router
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
