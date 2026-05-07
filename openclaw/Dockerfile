@@ -126,6 +126,15 @@ EOF
 
 RUN chmod +x /usr/local/bin/mem_guard.sh
 
+RUN cat <<'EOF' > /usr/local/bin/ram
+#!/bin/bash
+watch -n 1 cat /opt/mem.log
+EOF
+
+RUN chmod +x /usr/local/bin/ram
+# watch -n 1 cat /opt/mem.log
+# Sau đó chỉ cần chạy: ram
+
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
 printf '(proxy_port) {\n\
