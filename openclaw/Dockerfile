@@ -200,13 +200,9 @@ printf '(proxy_port) {\n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle {\n\
         uri strip_prefix /18789\n\
-        reverse_proxy 127.0.0.1:18789 127.0.0.1:8081 {
-            # Thử cổng đầu tiên, nếu lỗi thì chuyển sang cổng tiếp theo
+        reverse_proxy 127.0.0.1:18789 127.0.0.1:8081 {\n\
             lb_policy first\n\
-            
-            # Kiểm tra nếu kết nối bị từ chối (dịch vụ chưa chạy)
-            health_timeout 5s\n\
-        }
+        }\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
