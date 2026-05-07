@@ -20,6 +20,7 @@ RUN apt update && apt install -y \
     procps htop tmux \
     ca-certificates \
     caddy \
+    tar net-tools \
     # python3 python3-pip \
     && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
     && apt-get install -y nodejs \
@@ -64,7 +65,7 @@ RUN cat <<'EOF' > /usr/local/bin/mem_guard.sh
 
 THRESHOLD=85
 LOG_LINES=5
-LOG_FILE="/workspace/mem.log"
+LOG_FILE="/opt/mem.log"
 
 log_buffer=()
 
@@ -198,8 +199,14 @@ printf '(proxy_port) {\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle {\n\
-        uri strip_prefix /10000\n\
-        reverse_proxy 127.0.0.1:10000\n\
+        uri strip_prefix /18789
+        reverse_proxy 127.0.0.1:18789 127.0.0.1:8081 {
+            # Thử cổng đầu tiên, nếu lỗi thì chuyển sang cổng tiếp theo
+            lb_policy first
+            
+            # Kiểm tra nếu kết nối bị từ chối (dịch vụ chưa chạy)
+            health_timeout 5s
+        }
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
@@ -232,3 +239,4 @@ EXPOSE 8080
 CMD ["/run.sh"]
 # Chạy lại (reload) caddy
 # caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+# watch -n 1 cat /workspace/mem.log
