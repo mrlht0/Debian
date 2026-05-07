@@ -166,7 +166,8 @@ ttyd -p 8082 -W -b /terminal bash &\n\
 sleep 1\n\
 
 echo "Caddy đang chạy..."\n\
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+# exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 
 echo "⏳ đợi caddy lên" \n\
 sleep 10\n\
