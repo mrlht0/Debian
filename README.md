@@ -1,6 +1,6 @@
 # Debian
 ```text id="5gqnyxc"
-https://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@github.com/nguyenbanhat37/Debian.git
+https://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@[github.com/nguyenbanhat37/Debian.git]
 ```
 
 ```
