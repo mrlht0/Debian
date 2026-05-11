@@ -43,7 +43,7 @@ ENV DS2API_ADMIN_KEY=admin
 # ENV HOSTNAME=0.0.0.0
 # ENV NEXT_PUBLIC_BASE_URL=http://localhost:10000
 
-RUN npm install -g 9router
+# RUN npm install -g 9router
 # RUN 9router
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
