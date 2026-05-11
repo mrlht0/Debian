@@ -10,7 +10,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 # ─── 1. Cài đặt các gói cơ bản ─────────────────────────
 RUN apt update && apt install -y \
     bash curl wget git nano \
-    golang-go \
     procps htop tmux \
     ca-certificates \
     caddy \
@@ -18,7 +17,13 @@ RUN apt update && apt install -y \
     # python3 python3-pip \
     && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
     && apt-get install -y nodejs \
+    && wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz \
+    && rm -rf /usr/local/go \
+    && tar -C /usr/local -xzf go1.24.3.linux-amd64.tar.gz \
+    && rm go1.24.3.linux-amd64.tar.gz \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 # ─── 2. Cài đặt ttyd (bản mới nhất) ─────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
