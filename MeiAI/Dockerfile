@@ -10,6 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # ─── 1. Cài đặt các gói cơ bản ─────────────────────────
 RUN apt update && apt install -y \
     bash curl wget git nano \
+    golang-go \
     procps htop tmux \
     ca-certificates \
     caddy \
