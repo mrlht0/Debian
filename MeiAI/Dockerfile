@@ -37,14 +37,9 @@ RUN cp config.example.json config.json
 RUN npm ci --prefix webui --no-audit
 RUN npm run build --prefix webui
 ENV DS2API_ADMIN_KEY=admin
-
-# ## 4. Thiết lập biến môi trường (theo hướng dẫn của bạn)
-# ENV PORT=10000
-# ENV HOSTNAME=0.0.0.0
-# ENV NEXT_PUBLIC_BASE_URL=http://localhost:10000
-
-# RUN npm install -g 9router
-# RUN 9router
+RUN chmod +x run-lite.sh run-full.sh
+# ./run-lite.sh
+# ./run-full.sh
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 WORKDIR /
@@ -70,7 +65,7 @@ exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
 # ─── 6. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
-# RUN npm i @tylaujjapan0/memcon
+RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
@@ -156,7 +151,10 @@ printf '(proxy_port) {\n\
 # Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
 echo "Đang khởi động dịch vụ Cloud Dev..."\n\
-
+\n\
+# chạy mem_guard nền\n\
+nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
+\n\
 # ttyd chính (Cổng 8081)\n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 \n\
