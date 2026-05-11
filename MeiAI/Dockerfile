@@ -17,10 +17,6 @@ RUN apt update && apt install -y \
     # python3 python3-pip \
     && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
     && apt-get install -y nodejs \
-    && wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz \
-    && rm -rf /usr/local/go \
-    && tar -C /usr/local -xzf go1.24.3.linux-amd64.tar.gz \
-    && rm go1.24.3.linux-amd64.tar.gz \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/go/bin:${PATH}"
@@ -37,13 +33,19 @@ WORKDIR /
 RUN git clone --recursive https://github.com/mrlht0/MeiAI.git
 WORKDIR /MeiAI
 
+# Cài go
+RUN wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz \
+    && rm -rf /usr/local/go \
+    && tar -C /usr/local -xzf go1.24.3.linux-amd64.tar.gz \
+    && rm go1.24.3.linux-amd64.tar.gz \
+
 # # 3. Cài đặt dependencies và build
 RUN npm install
 RUN cp config.example.json config.json
 RUN npm ci --prefix webui --no-audit
 RUN npm run build --prefix webui
 # RUN find . -type f -name "*.go" | head -50
-# RUN go build -o meiai .
+RUN go build -o meiai ./app
 
 ENV MEIAI_LITE_MODE=0
 ENV MEIAI_ADMIN_KEY=admin
