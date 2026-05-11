@@ -44,9 +44,9 @@ RUN npm ci --prefix webui --no-audit
 RUN npm run build --prefix webui
 RUN find . -type f -name "*.go" | head -50
 RUN go build -o meiai .
-export MEIAI_LITE_MODE=0
-export MEIAI_ADMIN_KEY=admin
-export PORT=5001
+ENV MEIAI_LITE_MODE=0
+ENV MEIAI_ADMIN_KEY=admin
+ENV PORT=5001
 # ./meiai
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
