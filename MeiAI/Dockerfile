@@ -26,10 +26,10 @@ RUN wget -O /usr/local/bin/ttyd \
 
 # ─── 3. Cấu hình thư mục làm việc ────────────────────────────
 # # 1. Đảm bảo có thư mục làm việc
-WORKDIR /opt
+WORKDIR /
 
 RUN git clone --recursive https://github.com/mrlht0/MeiAI.git
-WORKDIR /opt/MeiAI
+WORKDIR /MeiAI
 
 # # 3. Cài đặt dependencies và build
 RUN npm install
@@ -47,6 +47,7 @@ ENV DS2API_ADMIN_KEY=admin
 # RUN 9router
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
+WORKDIR /
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
 
 RUN printf "set -g mouse on\n\
