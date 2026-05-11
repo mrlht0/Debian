@@ -26,16 +26,17 @@ RUN wget -O /usr/local/bin/ttyd \
 
 # ─── 3. Cấu hình thư mục làm việc ────────────────────────────
 # # 1. Đảm bảo có thư mục làm việc
-# WORKDIR /opt
+WORKDIR /opt
 
 RUN git clone --recursive https://github.com/mrlht0/MeiAI.git
+WORKDIR /opt/MeiAI
 
 # # 3. Cài đặt dependencies và build
 RUN npm install
 RUN cp config.example.json config.json
 RUN npm ci --prefix webui --no-audit
 RUN npm run build --prefix webui
-RUN $env:DS2API_ADMIN_KEY="admin"
+ENV DS2API_ADMIN_KEY=admin
 
 # ## 4. Thiết lập biến môi trường (theo hướng dẫn của bạn)
 # ENV PORT=10000
