@@ -42,7 +42,8 @@ RUN npm install
 RUN cp config.example.json config.json
 RUN npm ci --prefix webui --no-audit
 RUN npm run build --prefix webui
-RUN go build -o meiai ./cmd/meiai
+RUN find . -type f -name "*.go" | head -50
+RUN go build -o meiai
 ENV DS2API_ADMIN_KEY=admin
 RUN chmod +x run-lite.sh run-full.sh
 # ./run-lite.sh
