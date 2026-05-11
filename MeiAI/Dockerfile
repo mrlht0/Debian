@@ -42,8 +42,8 @@ RUN npm install
 RUN cp config.example.json config.json
 RUN npm ci --prefix webui --no-audit
 RUN npm run build --prefix webui
-RUN find . -type f -name "*.go" | head -50
-RUN go build -o meiai .
+# RUN find . -type f -name "*.go" | head -50
+# RUN go build -o meiai .
 
 ENV MEIAI_LITE_MODE=0
 ENV MEIAI_ADMIN_KEY=admin
