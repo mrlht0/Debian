@@ -57,6 +57,34 @@ ENV NODE_ENV=production \
     PORT=5001
 # ./meiai
 
+# Cấu hình chạy tự động & ghi 2000 dòng log mới nhất
+RUN printf '#!/bin/bash\n\
+\n\
+cd /MeiAI\n\
+\n\
+LOG=/MeiAI/meiai.log\n\
+touch $LOG\n\
+\n\
+while true\n\
+do\n\
+    echo "==========================" >> $LOG\n\
+    echo "[START] $(date)" >> $LOG\n\
+\n\
+    ./meiai >> $LOG 2>&1 &\n\
+    PID=$!\n\
+\n\
+    while kill -0 $PID 2>/dev/null\n\
+    do\n\
+        tail -n 2000 $LOG > ${LOG}.tmp && mv ${LOG}.tmp $LOG\n\
+        sleep 30\n\
+    done\n\
+\n\
+    echo "[CRASH] restarting in 5s..." >> $LOG\n\
+    sleep 5\n\
+done\n\
+' > /MeiAI/start-meiai.sh && chmod +x /MeiAI/start-meiai.sh
+
+
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 WORKDIR /
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
@@ -175,6 +203,13 @@ echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 # chạy mem_guard nền\n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
+
+# Chạy dịch vụ chính
+nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
+# Rồi xem log riêng: tail -f /MeiAI/meiai.log
+# kill khi cần: pkill -f start-meiai.sh
+# pkill -f ./meiai
+
 # ttyd chính (Cổng 8081)\n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 \n\
