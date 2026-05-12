@@ -19,8 +19,6 @@ RUN apt update && apt install -y \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/usr/local/go/bin:${PATH}"
-
 # ─── 2. Cài đặt ttyd (bản mới nhất) ─────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
@@ -47,8 +45,8 @@ RUN cp config.example.json config.json
 RUN npm ci --prefix webui --no-audit
 RUN npm run build --prefix webui
 # RUN find . -type f -name "*.go" | head -50
-# RUN go build -o meiai ./cmd/meiai
-# RUN chmod +x meiai
+RUN go build -o meiai ./cmd/meiai
+RUN chmod +x meiai
 
 ENV NODE_ENV=production \
     MEIAI_LITE_MODE=0 \
