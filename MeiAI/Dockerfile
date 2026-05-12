@@ -48,6 +48,9 @@ RUN npm run build --prefix webui
 RUN go build -o meiai ./cmd/meiai
 RUN chmod +x meiai
 
+# export PORT=5001
+# ./meiai
+
 ENV NODE_ENV=production \
     MEIAI_LITE_MODE=0 \
     MEIAI_ADMIN_KEY=admin \
@@ -133,6 +136,10 @@ printf '(proxy_port) {\n\
         reverse_proxy 127.0.0.1:18789\n\
     }\n\
 \n\
+    handle /meiai* {\n\
+        reverse_proxy 127.0.0.1:5001\n\
+    }\n\
+\n\
     handle /10000* {\n\
 #        uri strip_prefix /10000\n\
         reverse_proxy 127.0.0.1:10000\n\
@@ -153,8 +160,8 @@ printf '(proxy_port) {\n\
 \n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle {\n\
-        uri strip_prefix /5001\n\
-        reverse_proxy 127.0.0.1:5001 {\n\
+        uri strip_prefix /10000\n\
+        reverse_proxy 127.0.0.1:10000 {\n\
             lb_policy first\n\
         }\n\
     }\n\
