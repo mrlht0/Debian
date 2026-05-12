@@ -154,7 +154,7 @@ printf '(proxy_port) {\n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle {\n\
         uri strip_prefix /5001\n\
-        reverse_proxy 127.0.0.1:20128 127.0.0.1:5001 {\n\
+        reverse_proxy 127.0.0.1:5001 {\n\
             lb_policy first\n\
         }\n\
     }\n\
