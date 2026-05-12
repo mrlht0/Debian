@@ -204,8 +204,8 @@ echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
 
-# Chạy dịch vụ chính
-nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
+# Chạy dịch vụ chính, tạm tắt nếu muốn dùng thêm teminal
+# nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
 # Rồi xem log riêng: tail -f /MeiAI/meiai.log
 # kill khi cần: pkill -f start-meiai.sh
 # pkill -f ./meiai
