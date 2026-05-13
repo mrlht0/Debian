@@ -28,10 +28,10 @@ RUN wget -O /usr/local/bin/ttyd \
 WORKDIR /
 
 # Cài đặt git (nếu base image chưa có, ví dụ như alpine hoặc slim)
-RUN apt-get update && apt-get install -y git
+# RUN apt-get update && apt-get install -y git
 
 # Thêm lệnh git clone vào trước URL
-RUN git clone https://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@github.com/mrlht0/MeiAI.git
+RUN git clone https://oauth2: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@github.com/mrlht0/MeiAI.git
 
 # Di chuyển vào thư mục vừa clone
 WORKDIR /MeiAI
