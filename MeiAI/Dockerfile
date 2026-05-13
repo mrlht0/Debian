@@ -31,7 +31,7 @@ WORKDIR /
 # RUN apt-get update && apt-get install -y git
 
 # Thêm lệnh git clone vào trước URL
-RUN git clone https://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@github.com/mrlht0/MeiAI.git
+RUN git clone https://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@github.com/mrlht0/MeiAI.git
 
 # Di chuyển vào thư mục vừa clone
 WORKDIR /MeiAI
