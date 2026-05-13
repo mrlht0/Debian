@@ -28,7 +28,7 @@ RUN wget -O /usr/local/bin/ttyd \
 # # 1. Đảm bảo có thư mục làm việc
 WORKDIR /
 
-RUN git clone --recursive https://github.com/mrlht0/MeiAI.git
+RUN  https://x-access-token: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@github.com/mrlht0/MeiAI.git
 WORKDIR /MeiAI
 
 # Cài go
