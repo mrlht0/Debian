@@ -27,14 +27,27 @@ RUN wget -O /usr/local/bin/ttyd \
 # ─── 3. Cấu hình thư mục làm việc ────────────────────────────
 WORKDIR /
 
-# Cài đặt git (nếu base image chưa có, ví dụ như alpine hoặc slim)
-# RUN apt-get update && apt-get install -y git
+# 1. Cài đặt git và openssh-client (nếu chưa có)
+RUN apt-get update && apt-get install -y git openssh-client
 
-# Sử dụng tr -d để xóa sạch dấu xuống dòng hoặc khoảng trắng thừa
-RUN TOKEN=$(cat /tmp/t.text | tr -d '\n' | tr -d '\r' | tr -d ' ') && \
-    git clone https://oauth2:${TOKEN}@github.com/mrlht0/MeiAI.git
+# 2. Tạo thư mục .ssh và thêm github.com vào known_hosts
+RUN mkdir -p -m 0700 /root/.ssh && \
+    ssh-keyscan github.com >> /root/.ssh/known_hosts
 
-# Di chuyển vào thư mục vừa clone
+# 3. Ghi trực tiếp khóa bí mật vào file id_ed25519
+RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
+    echo "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW" >> /root/.ssh/id_ed25519 && \
+    echo "QyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+QAAAJCe7Zalnu2W" >> /root/.ssh/id_ed25519 && \
+    echo "pQAAAAtzc2gtZWQyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+Q" >> /root/.ssh/id_ed25519 && \
+    echo "AAAECu5uyGvQNoDwFalwDHbBQswmv31282a9dUGLoEnkLiIqVC9mYZaFP7edHr6L+/QjZF" >> /root/.ssh/id_ed25519 && \
+    echo "AU6/Lg9Fyehi2v9QGTP5AAAAC3R5bGF1QE1yTEhUAQI=" >> /root/.ssh/id_ed25519 && \
+    echo "-----END OPENSSH PRIVATE KEY-----" >> /root/.ssh/id_ed25519 && \
+    chmod 600 /root/.ssh/id_ed25519 && \
+# 4. Thực hiện clone repo bằng địa chỉ SSH
+    git clone git@github.com:mrlht0/MeiAI.git && \
+# 5. Xóa khóa bí mật ngay lập tức để bảo mật layer
+    rm /root/.ssh/id_ed25519
+
 WORKDIR /MeiAI
 
 # Cài go
