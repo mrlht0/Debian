@@ -30,8 +30,16 @@ WORKDIR /
 # Cài đặt git (nếu base image chưa có, ví dụ như alpine hoặc slim)
 # RUN apt-get update && apt-get install -y git
 
-# Thêm lệnh git clone vào trước URL
-RUN git clone https://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@github.com/mrlht0/MeiAI.git
+# 2. Copy file chứa token vào image
+COPY t.text /tmp/t.text
+
+# 3. Đọc token từ file và chạy lệnh clone
+# Sử dụng $(cat ...) để lấy nội dung file t.text
+RUN TOKEN=$(cat /tmp/t.text) && \
+    git clone https://oauth2:${TOKEN}@github.com/mrlht0/MeiAI.git
+
+# 4. Xóa file token sau khi dùng xong để bảo mật
+RUN rm /tmp/t.text
 
 # Di chuyển vào thư mục vừa clone
 WORKDIR /MeiAI
