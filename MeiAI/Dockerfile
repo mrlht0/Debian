@@ -223,14 +223,7 @@ RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.
 
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
-printf '{\n\
-    # Global options (servers chỉ được phép ở đây)\n\
-    servers {\n\
-        trusted_proxies static private_ranges\n\
-    }\n\
-}\n\
-\n\
-# Snippet dùng chung cho proxy port\n\
+printf '# Snippet dùng chung cho proxy port\n\
 (proxy_port) {\n\
     handle /{args.0}* {\n\
         reverse_proxy localhost:{args.0}\n\
