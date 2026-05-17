@@ -316,25 +316,27 @@ printf '# Snippet dùng chung cho proxy port\n\
 RUN printf '#!/bin/bash\n\
 echo "Starting Cloud Dev Services..."\n\
 \n\
-# Xóa flag file cũ (nếu có)\n\
-rm -f /tmp/meiai_started.flag\n\
-\n\
-# Chạy mem_guard\n\
+# Chạy mem_guard nền\n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
-# Chạy ttyd services (KHÔNG dùng -b nếu muốn Caddy xử lý đường dẫn)\n\
+# Chạy ttyd services\n\
 ttyd -p 8081 -W /start.sh &\n\
 ttyd -p 8082 -W bash &\n\
 \n\
-# Đợi ttyd sẵn sàng\n\
+# Đợi các service khởi động\n\
 sleep 2\n\
 \n\
-echo "Services ready. Access at http://localhost:8080"\n\
-echo "  - Terminal 1: /tmux"\n\
-echo "  - Terminal 2: /terminal"\n\
-echo "  - Trigger MeiAI: /__trigger__ (first access will auto-start)"\n\
+# Khởi động MeiAI (chạy ngay lập tức)\n\
+if [ -f /MeiAI/start-meiai.sh ]; then\n\
+    echo "Starting MeiAI..."\n\
+    nohup /MeiAI/start-meiai.sh > /MeiAI/meiai.log 2>&1 &\n\
+    echo "MeiAI started. Log: /MeiAI/meiai.log"\n\
+else\n\
+    echo "WARNING: /MeiAI/start-meiai.sh not found"\n\
+fi\n\
 \n\
-# Chạy Caddy (foreground)\n\
+# Khởi động Caddy (chạy foreground)\n\
+echo "Starting Caddy..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
