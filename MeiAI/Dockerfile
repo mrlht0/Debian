@@ -135,91 +135,91 @@ exec tmux attach -t $SESSION\n\
 # ─── 6. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-# # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
-# RUN mkdir -p /etc/caddy && \
-# printf '(proxy_port) {\n\
-#     handle /{args.0}* {\n\
-#         reverse_proxy localhost:{args.0}\n\
-#     }\n\
-# }\n\
+# ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
+RUN mkdir -p /etc/caddy && \
+printf '(proxy_port) {\n\
+    handle /{args.0}* {\n\
+        reverse_proxy localhost:{args.0}\n\
+    }\n\
+}\n\
+\n\
+:8080 {\n\
+    handle /terminal* {\n\
+        uri strip_prefix /terminal\n\
+        reverse_proxy localhost:8082\n\
+    }\n\
 # \n\
-# :8080 {\n\
-#     handle /terminal* {\n\
-#         uri strip_prefix /terminal\n\
-#         reverse_proxy localhost:8082\n\
-#     }\n\
-# # \n\
-# #     handle /8083* {\n\
-# #         reverse_proxy localhost:8083\n\
-# #     }\n\
-# # \n\
-# #     handle /8084* {\n\
-# #         reverse_proxy localhost:8084\n\
-# #     }\n\
-# # \n\
-# #     handle /8085* {\n\
-# #         reverse_proxy localhost:8085\n\
-# #     }\n\
-# # \n\
-# #     handle /8086* {\n\
-# #         reverse_proxy localhost:8086\n\
-# #     }\n\
-# # \n\
-# #     handle /8087* {\n\
-# #         reverse_proxy localhost:8087\n\
-# #     }\n\
-# # \n\
-# #     handle /8088* {\n\
-# #         reverse_proxy localhost:8088\n\
-# #     }\n\
-# # \n\
-# #     handle /8089* {\n\
-# #         reverse_proxy localhost:8089\n\
-# #     }\n\
-# \n\
-#     handle /ttyd* {\n\
-#         reverse_proxy localhost:7681\n\
+#     handle /8083* {\n\
+#         reverse_proxy localhost:8083\n\
 #     }\n\
 # \n\
-#     handle /tmux* {\n\
-#         uri strip_prefix /tmux\n\
-#         reverse_proxy localhost:8081\n\
+#     handle /8084* {\n\
+#         reverse_proxy localhost:8084\n\
 #     }\n\
 # \n\
-#     handle /openclaw* {\n\
-#         reverse_proxy 127.0.0.1:18789\n\
+#     handle /8085* {\n\
+#         reverse_proxy localhost:8085\n\
 #     }\n\
 # \n\
-#     handle /meiai* {\n\
-#         reverse_proxy 127.0.0.1:5001\n\
+#     handle /8086* {\n\
+#         reverse_proxy localhost:8086\n\
 #     }\n\
 # \n\
-#     handle /10000* {\n\
-# #        uri strip_prefix /10000\n\
-#         reverse_proxy 127.0.0.1:10000 \n\
+#     handle /8087* {\n\
+#         reverse_proxy localhost:8087\n\
 #     }\n\
 # \n\
-#     # Sử dụng Snippet cho các port hàng loạt\n\
-#     import proxy_port 8083\n\
-#     import proxy_port 8084\n\
-#     import proxy_port 8085\n\
-#     import proxy_port 8086\n\
-#     import proxy_port 8087\n\
-#     import proxy_port 8088\n\
-#     import proxy_port 8089\n\
-#     # import proxy_port 10000\n\
-#     import proxy_port 10001\n\
-#     import proxy_port 10002\n\
-#     import proxy_port 10003\n\
-# \n\
-#     # Mặc định 1 trong ba từ trái qua phải\n\
-#     handle {\n\
-#         uri strip_prefix /10000\n\
-#         reverse_proxy 127.0.0.1:10000 {\n\
-#             lb_policy first\n\
-#         }\n\
+#     handle /8088* {\n\
+#         reverse_proxy localhost:8088\n\
 #     }\n\
-# }\n' > /etc/caddy/Caddyfile
+# \n\
+#     handle /8089* {\n\
+#         reverse_proxy localhost:8089\n\
+#     }\n\
+\n\
+    handle /ttyd* {\n\
+        reverse_proxy localhost:7681\n\
+    }\n\
+\n\
+    handle /tmux* {\n\
+        uri strip_prefix /tmux\n\
+        reverse_proxy localhost:8081\n\
+    }\n\
+\n\
+    handle /openclaw* {\n\
+        reverse_proxy 127.0.0.1:18789\n\
+    }\n\
+\n\
+    handle /meiai* {\n\
+        reverse_proxy 127.0.0.1:5001\n\
+    }\n\
+\n\
+    handle /10000* {\n\
+#        uri strip_prefix /10000\n\
+        reverse_proxy 127.0.0.1:10000 \n\
+    }\n\
+\n\
+    # Sử dụng Snippet cho các port hàng loạt\n\
+    import proxy_port 8083\n\
+    import proxy_port 8084\n\
+    import proxy_port 8085\n\
+    import proxy_port 8086\n\
+    import proxy_port 8087\n\
+    import proxy_port 8088\n\
+    import proxy_port 8089\n\
+    # import proxy_port 10000\n\
+    import proxy_port 10001\n\
+    import proxy_port 10002\n\
+    import proxy_port 10003\n\
+\n\
+    # Mặc định 1 trong ba từ trái qua phải\n\
+    handle {\n\
+        uri strip_prefix /10000\n\
+        reverse_proxy 127.0.0.1:10000 {\n\
+            lb_policy first\n\
+        }\n\
+    }\n\
+}\n' > /etc/caddy/Caddyfile
 
 # # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
 # # Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
@@ -259,35 +259,6 @@ RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.
 # caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 # watch -n 1 cat /opt/mem.log
 
-# ─── 7. Cấu hình Caddyfile (Hỗ trợ WebSocket + Path Prefix) ─────────────────
-RUN mkdir -p /etc/caddy && \
-printf ':8080 {\n\
-    # Quan trọng: Dùng route thay vì handle để tránh lỗi grouping [citation:4]\n\
-    \n\
-    # Terminal 1 (ttyd trên 8081)\n\
-    route /tmux/* {\n\
-        uri strip_prefix /tmux\n\
-        reverse_proxy 127.0.0.1:8081 {\n\
-            # Bắt buộc cho WebSocket của ttyd [citation:2][citation:8]\n\
-            header_up Connection {http.request.header.Connection}\n\
-            header_up Upgrade {http.request.header.Upgrade}\n\
-        }\n\
-    }\n\
-    \n\
-    # Terminal 2 (ttyd trên 8082)\n\
-    route /terminal/* {\n\
-        uri strip_prefix /terminal\n\
-        reverse_proxy 127.0.0.1:8082 {\n\
-            header_up Connection {http.request.header.Connection}\n\
-            header_up Upgrade {http.request.header.Upgrade}\n\
-        }\n\
-    }\n\
-    \n\
-    # Proxy mặc định cho MeiAI (cổng 10000)\n\
-    route {\n\
-        reverse_proxy 127.0.0.1:10000\n\
-    }\n\
-}\n' > /etc/caddy/Caddyfile
 
 # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
 RUN printf '#!/bin/bash\n\
@@ -296,27 +267,60 @@ echo "Starting Cloud Dev Services..."\n\
 # Chạy mem_guard nền\n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
-# Chạy ttyd services với WebSocket support\n\
-# -W: cho phép ghi (writable) [citation:8]\n\
-# -p: cổng lắng nghe\n\
+# Chạy ttyd services\n\
 ttyd -p 8081 -W /start.sh &\n\
 ttyd -p 8082 -W bash &\n\
 \n\
-# Đợi ttyd sẵn sàng\n\
-sleep 2\n\
+# Khởi động Caddy trong nền\n\
+caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &\n\
+CADDY_PID=$!\n\
 \n\
-# Khởi động MeiAI\n\
-if [ -f /MeiAI/start-meiai.sh ]; then\n\
-    echo "Starting MeiAI..."\n\
-    nohup /MeiAI/start-meiai.sh > /MeiAI/meiai.log 2>&1 &\n\
-    echo "MeiAI started. Log: /MeiAI/meiai.log"\n\
+# Hàm kiểm tra Caddy đã sẵn sàng chưa\n\
+wait_for_caddy() {\n\
+    echo "Waiting for Caddy to be ready..."\n\
+    local max_attempts=30\n\
+    local attempt=0\n\
+    \n\
+    while [ $attempt -lt $max_attempts ]; do\n\
+        if curl -s -o /dev/null -w "%%{http_code}" http://localhost:8080/health 2>/dev/null | grep -q "200\|404\|502"; then\n\
+            # Chỉ cần Caddy respond là đủ (kể cả 404 cũng được)\n\
+            echo "Caddy is ready! (attempt $((attempt+1))/$max_attempts)"\n\
+            return 0\n\
+        fi\n\
+        \n\
+        # Kiểm tra process Caddy vẫn chạy\n\
+        if ! kill -0 $CADDY_PID 2>/dev/null; then\n\
+            echo "ERROR: Caddy process died!"\n\
+            return 1\n\
+        fi\n\
+        \n\
+        attempt=$((attempt+1))\n\
+        echo "Waiting for Caddy... ($attempt/$max_attempts)"\n\
+        sleep 1\n\
+    done\n\
+    \n\
+    echo "ERROR: Caddy did not become ready in time"\n\
+    return 1\n\
+}\n\
+\n\
+# Đợi Caddy ready\n\
+if wait_for_caddy; then\n\
+    echo "✅ Caddy is running successfully"\n\
+    \n\
+    # Chạy MeiAI sau khi Caddy đã sẵn sàng\n\
+    if [ -f /MeiAI/start-meiai.sh ]; then\n\
+        echo "Starting MeiAI..."\n\
+        nohup /MeiAI/start-meiai.sh > /MeiAI/meiai.log 2>&1 &\n\
+        echo "✅ MeiAI started. Log: /MeiAI/meiai.log"\n\
+    else\n\
+        echo "⚠️  WARNING: /MeiAI/start-meiai.sh not found"\n\
+    fi\n\
 else\n\
-    echo "WARNING: /MeiAI/start-meiai.sh not found"\n\
+    echo "❌ Caddy failed to start. MeiAI will not be started."\n\
 fi\n\
 \n\
-# Tạo script auto-run trong terminal (chạy khi mở terminal lần đầu)\n\
+# Tạo script auto-run trong terminal\n\
 cat > /root/.bashrc << "EOF"\n\
-# Auto-run command khi mở terminal lần đầu\n\
 if [ ! -f /tmp/terminal_initialized ]; then\n\
     echo "========================================="\n\
     echo "🚀 Chào mừng! Đây là terminal của bạn"\n\
@@ -328,13 +332,7 @@ if [ ! -f /tmp/terminal_initialized ]; then\n\
     echo "   - mei-logs   : Xem log của MeiAI"\n\
     echo "   - mei-stop   : Dừng MeiAI service"\n\
     echo ""\n\
-    echo "🔄 Đang tự động khởi động MeiAI...\n"\n\
     touch /tmp/terminal_initialized\n\
-    \n\
-    # Chạy lệnh bạn muốn tự động\n\
-    /MeiAI/start-meiai.sh &\n\
-    echo "✅ MeiAI đã được khởi động trong nền!"\n\
-    echo ""\n\
 fi\n\
 \n\
 # Aliases tiện lợi\nalias mei-start="nohup /MeiAI/start-meiai.sh > /MeiAI/meiai.log 2>&1 &"\n\
@@ -342,15 +340,13 @@ alias mei-status="ps aux | grep -E "start-meiai|meiai" | grep -v grep"\n\
 alias mei-logs="tail -f /MeiAI/meiai.log"\n\
 alias mei-stop="pkill -f start-meiai.sh"\n\
 \n\
-# Prompt đẹp hơn\nexport PS1="\\[\\033[38;5;2m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[38;5;6m\\]\\w\\[\\033[00m\\]\\$ "\n\
+export PS1="\\[\\033[38;5;2m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[38;5;6m\\]\\w\\[\\033[00m\\]\\$ "\n\
 EOF\n\
 \n\
-# Copy .bashrc cho user khác nếu cần\n\
 cp /root/.bashrc /etc/skel/.bashrc 2>/dev/null || true\n\
 \n\
-# Khởi động Caddy (chạy foreground)\n\
-echo "Starting Caddy..."\n\
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+# Giữ Caddy chạy foreground\n\
+wait $CADDY_PID\n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
