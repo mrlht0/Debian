@@ -145,7 +145,6 @@ printf '(proxy_port) {\n\
 \n\
 :8080 {\n\
     handle /terminal* {\n\
-        uri strip_prefix /terminal\n\
         reverse_proxy localhost:8082\n\
     }\n\
 # \n\
@@ -182,7 +181,6 @@ printf '(proxy_port) {\n\
     }\n\
 \n\
     handle /tmux* {\n\
-        uri strip_prefix /tmux\n\
         reverse_proxy localhost:8081\n\
     }\n\
 \n\
@@ -215,9 +213,7 @@ printf '(proxy_port) {\n\
     # Mặc định 1 trong ba từ trái qua phải\n\
     handle {\n\
         uri strip_prefix /10000\n\
-        reverse_proxy 127.0.0.1:10000 {\n\
-            lb_policy first\n\
-        }\n\
+        reverse_proxy 127.0.0.1:10000 \n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
