@@ -135,14 +135,105 @@ exec tmux attach -t $SESSION\n\
 # ─── 6. Thêm mem_guard (giới hạn RAM + log 5 dòng) ─────────────────────────────
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
+# # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
+# RUN mkdir -p /etc/caddy && \
+# printf '(proxy_port) {\n\
+#     handle /{args.0}* {\n\
+#         reverse_proxy localhost:{args.0}\n\
+#     }\n\
+# }\n\
+# \n\
+# :8080 {\n\
+#     handle /terminal* {\n\
+#         uri strip_prefix /terminal\n\
+#         reverse_proxy localhost:8082\n\
+#     }\n\
+# # \n\
+# #     handle /8083* {\n\
+# #         reverse_proxy localhost:8083\n\
+# #     }\n\
+# # \n\
+# #     handle /8084* {\n\
+# #         reverse_proxy localhost:8084\n\
+# #     }\n\
+# # \n\
+# #     handle /8085* {\n\
+# #         reverse_proxy localhost:8085\n\
+# #     }\n\
+# # \n\
+# #     handle /8086* {\n\
+# #         reverse_proxy localhost:8086\n\
+# #     }\n\
+# # \n\
+# #     handle /8087* {\n\
+# #         reverse_proxy localhost:8087\n\
+# #     }\n\
+# # \n\
+# #     handle /8088* {\n\
+# #         reverse_proxy localhost:8088\n\
+# #     }\n\
+# # \n\
+# #     handle /8089* {\n\
+# #         reverse_proxy localhost:8089\n\
+# #     }\n\
+# \n\
+#     handle /ttyd* {\n\
+#         reverse_proxy localhost:7681\n\
+#     }\n\
+# \n\
+#     handle /tmux* {\n\
+#         uri strip_prefix /tmux\n\
+#         reverse_proxy localhost:8081\n\
+#     }\n\
+# \n\
+#     handle /openclaw* {\n\
+#         reverse_proxy 127.0.0.1:18789\n\
+#     }\n\
+# \n\
+#     handle /meiai* {\n\
+#         reverse_proxy 127.0.0.1:5001\n\
+#     }\n\
+# \n\
+#     handle /10000* {\n\
+# #        uri strip_prefix /10000\n\
+#         reverse_proxy 127.0.0.1:10000 \n\
+#     }\n\
+# \n\
+#     # Sử dụng Snippet cho các port hàng loạt\n\
+#     import proxy_port 8083\n\
+#     import proxy_port 8084\n\
+#     import proxy_port 8085\n\
+#     import proxy_port 8086\n\
+#     import proxy_port 8087\n\
+#     import proxy_port 8088\n\
+#     import proxy_port 8089\n\
+#     # import proxy_port 10000\n\
+#     import proxy_port 10001\n\
+#     import proxy_port 10002\n\
+#     import proxy_port 10003\n\
+# \n\
+#     # Mặc định 1 trong ba từ trái qua phải\n\
+#     handle {\n\
+#         uri strip_prefix /10000\n\
+#         reverse_proxy 127.0.0.1:10000 {\n\
+#             lb_policy first\n\
+#         }\n\
+#     }\n\
+# }\n' > /etc/caddy/Caddyfile
+
 # ─── 7. Cấu hình Caddyfile (Xử lý đa đường dẫn) ─────────────────
 RUN mkdir -p /etc/caddy && \
-printf '(proxy_port) {\n\
-    handle /{args.0}* {\n\
-        reverse_proxy localhost:{args.0}\n\
-    }\n\
+printf '{\n\
+    # Global options (servers chỉ được phép ở đây)\n\
     servers {\n\
         trusted_proxies static private_ranges\n\
+    }\n\
+}\n\
+\n\
+# Snippet dùng chung cho proxy port\n\
+(proxy_port) {\n\
+    handle /{args.0}* {\n\
+        reverse_proxy localhost:{args.0}\n\
     }\n\
 }\n\
 \n\
@@ -150,38 +241,6 @@ printf '(proxy_port) {\n\
     handle /terminal* {\n\
         uri strip_prefix /terminal\n\
         reverse_proxy localhost:8082\n\
-    }\n\
-# \n\
-#     handle /8083* {\n\
-#         reverse_proxy localhost:8083\n\
-#     }\n\
-# \n\
-#     handle /8084* {\n\
-#         reverse_proxy localhost:8084\n\
-#     }\n\
-# \n\
-#     handle /8085* {\n\
-#         reverse_proxy localhost:8085\n\
-#     }\n\
-# \n\
-#     handle /8086* {\n\
-#         reverse_proxy localhost:8086\n\
-#     }\n\
-# \n\
-#     handle /8087* {\n\
-#         reverse_proxy localhost:8087\n\
-#     }\n\
-# \n\
-#     handle /8088* {\n\
-#         reverse_proxy localhost:8088\n\
-#     }\n\
-# \n\
-#     handle /8089* {\n\
-#         reverse_proxy localhost:8089\n\
-#     }\n\
-\n\
-    handle /ttyd* {\n\
-        reverse_proxy localhost:7681\n\
     }\n\
 \n\
     handle /tmux* {\n\
@@ -198,8 +257,7 @@ printf '(proxy_port) {\n\
     }\n\
 \n\
     handle /10000* {\n\
-#        uri strip_prefix /10000\n\
-        reverse_proxy 127.0.0.1:10000 \n\
+        reverse_proxy 127.0.0.1:10000\n\
     }\n\
 \n\
     # Sử dụng Snippet cho các port hàng loạt\n\
@@ -210,12 +268,11 @@ printf '(proxy_port) {\n\
     import proxy_port 8087\n\
     import proxy_port 8088\n\
     import proxy_port 8089\n\
-    # import proxy_port 10000\n\
     import proxy_port 10001\n\
     import proxy_port 10002\n\
     import proxy_port 10003\n\
 \n\
-    # Mặc định 1 trong ba từ trái qua phải\n\
+    # Mặc định (fallback)\n\
     handle {\n\
         uri strip_prefix /10000\n\
         reverse_proxy 127.0.0.1:10000 {\n\
