@@ -219,40 +219,93 @@ printf '(proxy_port) {\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
+# # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
+# # Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
+# RUN printf '#!/bin/bash\n\
+# echo "Đang khởi động dịch vụ Cloud Dev..."\n\
+# \n\
+# # chạy mem_guard nền\n\
+# nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
+# \n\
+
+# # Chạy dịch vụ chính, tạm tắt nếu muốn dùng thêm teminal
+# # nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
+# # Rồi xem log riêng: tail -f /MeiAI/meiai.log
+# # kill khi cần: pkill -f start-meiai.sh
+# # pkill -f ./meiai
+
+# # ttyd chính (Cổng 8081)\n\
+# ttyd -p 8081 -W -b /tmux /start.sh &\n\
+# \n\
+# # ttyd phụ (Cổng 8082)\n\
+# ttyd -p 8082 -W -b /terminal bash &\n\
+# \n\
+# # \n\
+# # ⏳ đợi service lên
+# sleep 1\n\
+
+# echo "Caddy đang chạy..."\n\
+# exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+# echo "⏳ run 9router" \n\
+# ' > /run.sh && chmod +x /run.sh
+
+# EXPOSE 8080
+
+# CMD ["/run.sh"]
+
+# Chạy lại (reload) caddy
+# caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+# watch -n 1 cat /opt/mem.log
+
 # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
-# Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
 echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 \n\
-# chạy mem_guard nền\n\
+FLAG_FILE="/tmp/meiai_started.flag"\n\
+START_SCRIPT="/MeiAI/start-meiai.sh"\n\
+LOG_FILE="/MeiAI/meiai.log"\n\
+\n\
+# Hàm khởi động meiai (chỉ chạy 1 lần)\n\
+start_meiai_if_needed() {\n\
+    if [ ! -f "$FLAG_FILE" ]; then\n\
+        echo "$(date): Lần đầu truy cập, đang khởi động MeiAI..." | tee -a "$LOG_FILE"\n\
+        touch "$FLAG_FILE"\n\
+        \n\
+        # Kiểm tra script tồn tại\n\
+        if [ -f "$START_SCRIPT" ]; then\n\
+            nohup "$START_SCRIPT" >> "$LOG_FILE" 2>&1 &\n\
+            echo "$(date): Đã khởi động start-meiai.sh (PID: $!)" | tee -a "$LOG_FILE"\n\
+            sleep 2  # Đợi service khởi động\n\
+        else\n\
+            echo "$(date): LỖI - Không tìm thấy $START_SCRIPT" | tee -a "$LOG_FILE"\n\
+        fi\n\
+    fi\n\
+}\n\
+\n\
+# Chạy mem_guard nền\n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
-
-# Chạy dịch vụ chính, tạm tắt nếu muốn dùng thêm teminal
-# nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
-# Rồi xem log riêng: tail -f /MeiAI/meiai.log
-# kill khi cần: pkill -f start-meiai.sh
-# pkill -f ./meiai
-
 # ttyd chính (Cổng 8081)\n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 \n\
 # ttyd phụ (Cổng 8082)\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-# \n\
-# ⏳ đợi service lên
-sleep 1\n\
-
+# Chạy một web server nhỏ để nhận request kích hoạt (cổng 8080)\n\
+# Dùng netcat hoặc python simple server để trigger\n\
+(\n\
+    while true; do\n\
+        # Lắng nghe trên cổng 8080, khi có request thì start meiai\n\
+        echo -e "HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\nMeiAI Ready" | nc -l -p 8080 -q 1\n\
+        start_meiai_if_needed\n\
+    done\n\
+) &\n\
+\n\
+# Khởi động Caddy (đây là service chính của bạn)\n\
 echo "Caddy đang chạy..."\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
-echo "⏳ run 9router" \n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
 
 CMD ["/run.sh"]
-
-# Chạy lại (reload) caddy
-# caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-# watch -n 1 cat /opt/mem.log
