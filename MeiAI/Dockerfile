@@ -221,134 +221,41 @@ printf '(proxy_port) {\n\
     }\n\
 }\n' > /etc/caddy/Caddyfile
 
-# # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
-# # Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
-# RUN printf '#!/bin/bash\n\
-# echo "Đang khởi động dịch vụ Cloud Dev..."\n\
-# \n\
-# # chạy mem_guard nền\n\
-# nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
-# \n\
-
-# # Chạy dịch vụ chính, tạm tắt nếu muốn dùng thêm teminal
-# # nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
-# # Rồi xem log riêng: tail -f /MeiAI/meiai.log
-# # kill khi cần: pkill -f start-meiai.sh
-# # pkill -f ./meiai
-
-# # ttyd chính (Cổng 8081)\n\
-# ttyd -p 8081 -W -b /tmux /start.sh &\n\
-# \n\
-# # ttyd phụ (Cổng 8082)\n\
-# ttyd -p 8082 -W -b /terminal bash &\n\
-# \n\
-# # \n\
-# # ⏳ đợi service lên
-# sleep 1\n\
-
-# echo "Caddy đang chạy..."\n\
-# exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
-# echo "⏳ run 9router" \n\
-# ' > /run.sh && chmod +x /run.sh
-
-# EXPOSE 8080
-
-# CMD ["/run.sh"]
-
-# Chạy lại (reload) caddy
-# caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-# watch -n 1 cat /opt/mem.log
-
-
 # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
+# Quan trọng: Thêm tham số -W ghi, -b cho ttyd để khớp với đường dẫn của Caddy
 RUN printf '#!/bin/bash\n\
-echo "Starting Cloud Dev Services..."\n\
+echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 \n\
-# Chạy mem_guard nền\n\
+# chạy mem_guard nền\n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
-# Chạy ttyd services\n\
-ttyd -p 8081 -W /start.sh &\n\
-ttyd -p 8082 -W bash &\n\
+
+# Chạy dịch vụ chính, tạm tắt nếu muốn dùng thêm teminal
+# nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
+# Rồi xem log riêng: tail -f /MeiAI/meiai.log
+# kill khi cần: pkill -f start-meiai.sh
+# pkill -f ./meiai
+
+# ttyd chính (Cổng 8081)\n\
+ttyd -p 8081 -W -b /tmux /start.sh &\n\
 \n\
-# Khởi động Caddy trong nền\n\
-caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &\n\
-CADDY_PID=$!\n\
+# ttyd phụ (Cổng 8082)\n\
+ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-# Hàm kiểm tra Caddy đã sẵn sàng chưa\n\
-wait_for_caddy() {\n\
-    echo "Waiting for Caddy to be ready..."\n\
-    local max_attempts=30\n\
-    local attempt=0\n\
-    \n\
-    while [ $attempt -lt $max_attempts ]; do\n\
-        if curl -s -o /dev/null -w "%%{http_code}" http://localhost:8080/health 2>/dev/null | grep -q "200\|404\|502"; then\n\
-            # Chỉ cần Caddy respond là đủ (kể cả 404 cũng được)\n\
-            echo "Caddy is ready! (attempt $((attempt+1))/$max_attempts)"\n\
-            return 0\n\
-        fi\n\
-        \n\
-        # Kiểm tra process Caddy vẫn chạy\n\
-        if ! kill -0 $CADDY_PID 2>/dev/null; then\n\
-            echo "ERROR: Caddy process died!"\n\
-            return 1\n\
-        fi\n\
-        \n\
-        attempt=$((attempt+1))\n\
-        echo "Waiting for Caddy... ($attempt/$max_attempts)"\n\
-        sleep 1\n\
-    done\n\
-    \n\
-    echo "ERROR: Caddy did not become ready in time"\n\
-    return 1\n\
-}\n\
-\n\
-# Đợi Caddy ready\n\
-if wait_for_caddy; then\n\
-    echo "✅ Caddy is running successfully"\n\
-    \n\
-    # Chạy MeiAI sau khi Caddy đã sẵn sàng\n\
-    if [ -f /MeiAI/start-meiai.sh ]; then\n\
-        echo "Starting MeiAI..."\n\
-        nohup /MeiAI/start-meiai.sh > /MeiAI/meiai.log 2>&1 &\n\
-        echo "✅ MeiAI started. Log: /MeiAI/meiai.log"\n\
-    else\n\
-        echo "⚠️  WARNING: /MeiAI/start-meiai.sh not found"\n\
-    fi\n\
-else\n\
-    echo "❌ Caddy failed to start. MeiAI will not be started."\n\
-fi\n\
-\n\
-# Tạo script auto-run trong terminal\n\
-cat > /root/.bashrc << "EOF"\n\
-if [ ! -f /tmp/terminal_initialized ]; then\n\
-    echo "========================================="\n\
-    echo "🚀 Chào mừng! Đây là terminal của bạn"\n\
-    echo "========================================="\n\
-    echo ""\n\
-    echo "📌 Các lệnh có sẵn:"\n\
-    echo "   - mei-start  : Khởi động MeiAI service"\n\
-    echo "   - mei-status : Kiểm tra trạng thái MeiAI"\n\
-    echo "   - mei-logs   : Xem log của MeiAI"\n\
-    echo "   - mei-stop   : Dừng MeiAI service"\n\
-    echo ""\n\
-    touch /tmp/terminal_initialized\n\
-fi\n\
-\n\
-# Aliases tiện lợi\nalias mei-start="nohup /MeiAI/start-meiai.sh > /MeiAI/meiai.log 2>&1 &"\n\
-alias mei-status="ps aux | grep -E "start-meiai|meiai" | grep -v grep"\n\
-alias mei-logs="tail -f /MeiAI/meiai.log"\n\
-alias mei-stop="pkill -f start-meiai.sh"\n\
-\n\
-export PS1="\\[\\033[38;5;2m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[38;5;6m\\]\\w\\[\\033[00m\\]\\$ "\n\
-EOF\n\
-\n\
-cp /root/.bashrc /etc/skel/.bashrc 2>/dev/null || true\n\
-\n\
-# Giữ Caddy chạy foreground\n\
-wait $CADDY_PID\n\
+# \n\
+# ⏳ đợi service lên
+sleep 1\n\
+
+echo "Caddy đang chạy..."\n\
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
+echo "⏳ run 9router" \n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
 
 CMD ["/run.sh"]
+
+# Chạy lại (reload) caddy
+# caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+# watch -n 1 cat /opt/mem.log
+
