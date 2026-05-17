@@ -141,10 +141,20 @@ printf '(proxy_port) {\n\
     handle /{args.0}* {\n\
         reverse_proxy localhost:{args.0}\n\
     }\n\
+    servers {\n\
+        trusted_proxies static private_ranges\n\
+    }\n\
 }\n\
 \n\
 :8080 {\n\
+     # Endpoint để trigger khởi động (gọi internal)\n\
+    handle /__trigger__ {\n\
+        respond "Triggering MeiAI..." 200\n\
+        exec /usr/local/bin/trigger_meiai.sh\n\
+    }\n\
+\n\
     handle /terminal* {\n\
+        uri strip_prefix /terminal\n\
         reverse_proxy localhost:8082\n\
     }\n\
 # \n\
@@ -181,6 +191,7 @@ printf '(proxy_port) {\n\
     }\n\
 \n\
     handle /tmux* {\n\
+        uri strip_prefix /tmux\n\
         reverse_proxy localhost:8081\n\
     }\n\
 \n\
@@ -194,7 +205,9 @@ printf '(proxy_port) {\n\
 \n\
     handle /10000* {\n\
 #        uri strip_prefix /10000\n\
-        reverse_proxy 127.0.0.1:10000\n\
+        reverse_proxy 127.0.0.1:10000 {\n\
+            lb_policy first\n\
+        }\n\
     }\n\
 \n\
     # Sử dụng Snippet cho các port hàng loạt\n\
@@ -259,50 +272,27 @@ printf '(proxy_port) {\n\
 
 # ─── 8. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
 RUN printf '#!/bin/bash\n\
-echo "Đang khởi động dịch vụ Cloud Dev..."\n\
+echo "Starting Cloud Dev Services..."\n\
 \n\
-FLAG_FILE="/tmp/meiai_started.flag"\n\
-START_SCRIPT="/MeiAI/start-meiai.sh"\n\
-LOG_FILE="/MeiAI/meiai.log"\n\
+# Xóa flag file cũ (nếu có)\n\
+rm -f /tmp/meiai_started.flag\n\
 \n\
-# Hàm khởi động meiai (chỉ chạy 1 lần)\n\
-start_meiai_if_needed() {\n\
-    if [ ! -f "$FLAG_FILE" ]; then\n\
-        echo "$(date): Lần đầu truy cập, đang khởi động MeiAI..." | tee -a "$LOG_FILE"\n\
-        touch "$FLAG_FILE"\n\
-        \n\
-        # Kiểm tra script tồn tại\n\
-        if [ -f "$START_SCRIPT" ]; then\n\
-            nohup "$START_SCRIPT" >> "$LOG_FILE" 2>&1 &\n\
-            echo "$(date): Đã khởi động start-meiai.sh (PID: $!)" | tee -a "$LOG_FILE"\n\
-            sleep 2  # Đợi service khởi động\n\
-        else\n\
-            echo "$(date): LỖI - Không tìm thấy $START_SCRIPT" | tee -a "$LOG_FILE"\n\
-        fi\n\
-    fi\n\
-}\n\
-\n\
-# Chạy mem_guard nền\n\
+# Chạy mem_guard\n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
-# ttyd chính (Cổng 8081)\n\
-ttyd -p 8081 -W -b /tmux /start.sh &\n\
+# Chạy ttyd services (KHÔNG dùng -b nếu muốn Caddy xử lý đường dẫn)\n\
+ttyd -p 8081 -W /start.sh &\n\
+ttyd -p 8082 -W bash &\n\
 \n\
-# ttyd phụ (Cổng 8082)\n\
-ttyd -p 8082 -W -b /terminal bash &\n\
+# Đợi ttyd sẵn sàng\n\
+sleep 2\n\
 \n\
-# Chạy một web server nhỏ để nhận request kích hoạt (cổng 8080)\n\
-# Dùng netcat hoặc python simple server để trigger\n\
-(\n\
-    while true; do\n\
-        # Lắng nghe trên cổng 8080, khi có request thì start meiai\n\
-        echo -e "HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\nMeiAI Ready" | nc -l -p 8080 -q 1\n\
-        start_meiai_if_needed\n\
-    done\n\
-) &\n\
+echo "Services ready. Access at http://localhost:8080"\n\
+echo "  - Terminal 1: /tmux"\n\
+echo "  - Terminal 2: /terminal"\n\
+echo "  - Trigger MeiAI: /__trigger__ (first access will auto-start)"\n\
 \n\
-# Khởi động Caddy (đây là service chính của bạn)\n\
-echo "Caddy đang chạy..."\n\
+# Chạy Caddy (foreground)\n\
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n\
 ' > /run.sh && chmod +x /run.sh
 
