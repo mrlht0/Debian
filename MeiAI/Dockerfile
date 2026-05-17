@@ -119,63 +119,16 @@ set -g history-limit 10000\n\
 setw -g mode-keys vi\n\
 " > /root/.tmux.conf
 
-# # ─── 5. Script tự động khởi tạo Tmux session ───────────────────────────
-# RUN printf '#!/bin/bash\n\
-# SESSION=main\n\
-# tmux has-session -t $SESSION 2>/dev/null\n\
-# if [ $? != 0 ]; then\n\
-#   tmux new-session -d -s $SESSION\n\
-#   tmux split-window -h\n\
-#   tmux split-window -v\n\
-#   tmux select-layout tiled\n\
-# fi\n\
-# exec tmux attach -t $SESSION\n\
-# ' > /start.sh && chmod +x /start.sh
-
-# ─── 5. Script tự động khởi tạo Tmux session với log viewer ───────────────────────────
+# ─── 5. Script tự động khởi tạo Tmux session ───────────────────────────
 RUN printf '#!/bin/bash\n\
 SESSION=main\n\
-LOG_FILE="/MeiAI/meiai.log"\n\
-\n\
-# Kill session cũ nếu có (để refresh)\n\
-tmux kill-session -t $SESSION 2>/dev/null\n\
-\n\
-# Tạo session mới\n\
-tmux new-session -d -s $SESSION -n "MeiAI"\n\
-\n\
-# Panel 0 (trái): Chạy tail -f log\n\
-tmux send-keys -t $SESSION:0.0 "echo \"📝 Monitoring MeiAI log...\"" C-m\n\
-tmux send-keys -t $SESSION:0.0 "echo \"Log file: $LOG_FILE\"" C-m\n\
-tmux send-keys -t $SESSION:0.0 "echo \"\"" C-m\n\
-tmux send-keys -t $SESSION:0.0 "tail -f $LOG_FILE" C-m\n\
-\n\
-# Tạo panel phải (split vertical)\n\
-tmux split-window -h -t $SESSION:0.0\n\
-\n\
-# Panel 1 (phải trên): Command prompt\n\
-tmux send-keys -t $SESSION:0.1 "echo \"🎮 Command Panel\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"Available commands:\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"  mei-status  - Check service status\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"  mei-logs    - View logs\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"  mei-stop    - Stop service\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"  mei-start   - Start service\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"💡 Tip: Use Ctrl+B then arrow keys to navigate\"" C-m\n\
-tmux send-keys -t $SESSION:0.1 "echo \"\"" C-m\n\
-\n\
-# Split panel phải thành 2 phần (trên/dưới)\n\
-tmux split-window -v -t $SESSION:0.1\n\
-\n\
-# Panel 2 (phải dưới): Command input\n\
-tmux send-keys -t $SESSION:0.2 "echo \"⚡ Ready for commands...\"" C-m\n\
-tmux send-keys -t $SESSION:0.2 "echo \"\"" C-m\n\
-\n\
-# Cân chỉnh layout\n\
-tmux select-layout -t $SESSION main-vertical\n\
-tmux select-pane -t $SESSION:0.2\n\
-\n\
-# Attach vào session\n\
+tmux has-session -t $SESSION 2>/dev/null\n\
+if [ $? != 0 ]; then\n\
+  tmux new-session -d -s $SESSION\n\
+  tmux split-window -h\n\
+  tmux split-window -v\n\
+  tmux select-layout tiled\n\
+fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
