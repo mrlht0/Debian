@@ -43,8 +43,13 @@ RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
     echo "AU6/Lg9Fyehi2v9QGTP5AAAAC3R5bGF1QE1yTEhUAQI=" >> /root/.ssh/id_ed25519 && \
     echo "-----END OPENSSH PRIVATE KEY-----" >> /root/.ssh/id_ed25519 && \
     chmod 600 /root/.ssh/id_ed25519 && \
-# 4. Thực hiện clone repo bằng địa chỉ SSH
+# 4. Thực hiện clone repo bằng địa chỉ SSH clone toàn bộ
     git clone git@github.com:mrlht0/MeiAI.git && \
+# 4. Thực hiện clone repo bằng địa chỉ SSH (chỉ clone 1 commit sâu)
+    # git clone --depth 1 git@github.com:mrlht0/MeiAI.git && \
+    # cd MeiAI && \
+    # git fetch --depth 1 origin a35e70c && \
+    # git checkout a35e70c && \
 # 5. Xóa khóa bí mật ngay lập tức để bảo mật layer
     rm /root/.ssh/id_ed25519
 
