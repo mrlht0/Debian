@@ -232,6 +232,15 @@ nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 # kill khi cần: pkill -f start-meiai.sh
 # pkill -f ./meiai
 
+# watchdog tự restart MeiAI nếu chết\n\
+(\n\
+while true\n\
+do\n\
+    pgrep -f start-meiai.sh >/dev/null || nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
+    sleep 60\n\
+done\n\
+) &\n\
+\n\
 # ttyd chính (Cổng 8081)\n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 \n\
