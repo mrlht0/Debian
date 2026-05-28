@@ -5,7 +5,6 @@ FROM node:26-bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
     PORT=5001 \
-    GOTOOLCHAIN=local \
     MEIAI_LITE_MODE=0 \
     MEIAI_ADMIN_KEY=admin
 
@@ -43,11 +42,11 @@ RUN set -eux; \
       npm run build --prefix webui; \
     fi; \
     if [ -f go.mod ]; then \
-      GO_VER=1.26.0; \
-      wget -q https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz; \
+      wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz && \
       rm -rf /usr/local/go; \
-      tar -C /usr/local -xzf go${GO_VER}.linux-amd64.tar.gz; \
-      rm go${GO_VER}.linux-amd64.tar.gz; \
+      tar -C /usr/local -xzf go1.24.3.linux-amd64.tar.gz; \
+      echo 'export PATH=$PATH:/usr/local/go/bin' >> /root/.bashrc; \
+      rm go1.24.3.linux-amd64.tar.gz; \
       export PATH="/usr/local/go/bin:${PATH}"; \
       go version; \
       go build -o meiai ./cmd/meiai; \
@@ -56,92 +55,92 @@ RUN set -eux; \
 
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-RUN cat > /proxy.js <<'EOF'\n\
-const http = require("http");\n\
-const net = require("net");\n\
-\n\
-const routes = [\n\
-  { prefix: "/tmux", port: 7681 },\n\
-  { prefix: "/", port: 5001 },\n\
-];\n\
-\n\
-function pickTarget(urlPath) {\n\
-  return routes.find((route) => urlPath.startsWith(route.prefix)) || routes[1];\n\
-}\n\
-\n\
-function proxyHttp(req, res) {\n\
-  const target = pickTarget(req.url || "/");\n\
-  const upstream = http.request(\n\
-    {\n\
-      host: "127.0.0.1",\n\
-      port: target.port,\n\
-      method: req.method,\n\
-      path: req.url,\n\
-      headers: req.headers,\n\
-    },\n\
-    (upstreamRes) => {\n\
-      res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);\n\
-      upstreamRes.pipe(res);\n\
-    }\n\
-  );\n\
-\n\
-  upstream.on("error", (err) => {\n\
-    res.writeHead(502, { "content-type": "text/plain" });\n\
-    res.end(`Proxy error: ${err.message}`);\n\
-  });\n\
-\n\
-  req.pipe(upstream);\n\
-}\n\
-\n\
-function proxyUpgrade(req, socket, head) {\n\
-  const target = pickTarget(req.url || "/");\n\
-  const upstream = net.connect(target.port, "127.0.0.1", () => {\n\
-    const headers = [\n\
-      `${req.method} ${req.url} HTTP/1.1`,\n\
-      `Host: 127.0.0.1:${target.port}`,\n\
-      "Connection: Upgrade",\n\
-      "Upgrade: websocket",\n\
-      ...Object.entries(req.headers)\n\
-        .filter(([key]) => !["host", "connection", "upgrade"].includes(key.toLowerCase()))\n\
-        .map(([key, value]) => `${key}: ${value}`),\n\
-      "",\n\
-      "",\n\
-    ].join("\\r\\n");\n\
-\n\
-    upstream.write(headers);\n\
-    if (head && head.length) upstream.write(head);\n\
-    socket.pipe(upstream).pipe(socket);\n\
-  });\n\
-\n\
-  upstream.on("error", () => socket.destroy());\n\
-}\n\
-\n\
-http.createServer(proxyHttp).on("upgrade", proxyUpgrade).listen(8080, "0.0.0.0");\n\
-EOF\n\
-\n\
-RUN cat > /run.sh <<'EOF'\n\
-#!/bin/bash\n\
-set -euo pipefail\n\
-\n\
-cd /app/MeiAI\n\
-\n\
-if [ -x /usr/local/bin/mem_guard.sh ]; then\n\
-  nohup /usr/local/bin/mem_guard.sh >/tmp/mem_guard.log 2>&1 &\n\
-fi\n\
-\n\
-SESSION=main\n\
-if ! tmux has-session -t \"$SESSION\" 2>/dev/null; then\n\
-  tmux new-session -d -s \"$SESSION\" -n meiai \"bash -lc 'cd /app/MeiAI && while true; do ./meiai; echo \\\"[meiai exited] restarting in 5s...\\\"; sleep 5; done'\"\n\
-  tmux split-window -h -t \"$SESSION:0\" \"bash -lc 'while true; do clear; ram; sleep 5; done'\"\n\
-  tmux split-window -v -t \"$SESSION:0.0\" \"bash\"\n\
-  tmux select-layout -t \"$SESSION\" tiled\n\
-fi\n\
-\n\
-ttyd -p 7681 -W -b /tmux tmux attach -t \"$SESSION\" &\n\
-exec node /proxy.js\n\
-EOF\n\
-\n\
-chmod +x /run.sh
+RUN cat > /proxy.js <<'EOF'
+const http = require("http");
+const net = require("net");
+
+const routes = [
+  { prefix: "/tmux", port: 7681 },
+  { prefix: "/", port: 5001 },
+];
+
+function pickTarget(urlPath) {
+  return routes.find((route) => urlPath.startsWith(route.prefix)) || routes[1];
+}
+
+function proxyHttp(req, res) {
+  const target = pickTarget(req.url || "/");
+  const upstream = http.request(
+    {
+      host: "127.0.0.1",
+      port: target.port,
+      method: req.method,
+      path: req.url,
+      headers: req.headers,
+    },
+    (upstreamRes) => {
+      res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+      upstreamRes.pipe(res);
+    }
+  );
+
+  upstream.on("error", (err) => {
+    res.writeHead(502, { "content-type": "text/plain" });
+    res.end(`Proxy error: ${err.message}`);
+  });
+
+  req.pipe(upstream);
+}
+
+function proxyUpgrade(req, socket, head) {
+  const target = pickTarget(req.url || "/");
+  const upstream = net.connect(target.port, "127.0.0.1", () => {
+    const headers = [
+      `${req.method} ${req.url} HTTP/1.1`,
+      `Host: 127.0.0.1:${target.port}`,
+      "Connection: Upgrade",
+      "Upgrade: websocket",
+      ...Object.entries(req.headers)
+        .filter(([key]) => !["host", "connection", "upgrade"].includes(key.toLowerCase()))
+        .map(([key, value]) => `${key}: ${value}`),
+      "",
+      "",
+    ].join("\r\n");
+
+    upstream.write(headers);
+    if (head && head.length) upstream.write(head);
+    socket.pipe(upstream).pipe(socket);
+  });
+
+  upstream.on("error", () => socket.destroy());
+}
+
+http.createServer(proxyHttp).on("upgrade", proxyUpgrade).listen(8080, "0.0.0.0");
+EOF
+
+RUN cat > /run.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+cd /app/MeiAI
+
+if [ -x /usr/local/bin/mem_guard.sh ]; then
+  nohup /usr/local/bin/mem_guard.sh >/tmp/mem_guard.log 2>&1 &
+fi
+
+SESSION=main
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+  tmux new-session -d -s "$SESSION" -n meiai "bash -lc 'cd /app/MeiAI && while true; do ./meiai; echo \"[meiai exited] restarting in 5s...\"; sleep 5; done'"
+  tmux split-window -h -t "$SESSION:0" "bash -lc 'while true; do clear; ram; sleep 5; done'"
+  tmux split-window -v -t "$SESSION:0.0" "bash"
+  tmux select-layout -t "$SESSION" tiled
+fi
+
+ttyd -p 7681 -W -b /tmux tmux attach -t "$SESSION" &
+exec node /proxy.js
+EOF
+
+RUN chmod +x /run.sh
 
 EXPOSE 8080
 
