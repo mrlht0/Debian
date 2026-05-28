@@ -5,6 +5,7 @@ FROM node:26-bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
     PORT=5001 \
+    GOTOOLCHAIN=local \
     MEIAI_LITE_MODE=0 \
     MEIAI_ADMIN_KEY=admin
 
@@ -42,7 +43,7 @@ RUN set -eux; \
       npm run build --prefix webui; \
     fi; \
     if [ -f go.mod ]; then \
-      GO_VER=1.24.3; \
+      GO_VER=1.26.0; \
       wget -q https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz; \
       rm -rf /usr/local/go; \
       tar -C /usr/local -xzf go${GO_VER}.linux-amd64.tar.gz; \
