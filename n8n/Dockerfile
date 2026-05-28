@@ -38,7 +38,7 @@ RUN set -eux; \
     if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi; \
     if [ -f config.example.json ]; then cp config.example.json config.json; fi; \
     if [ -d webui ]; then \
-      if [ -f webui/package-lock.json ]; then npm ci --prefix webui --no-audit --no-fund; else npm install --prefix webui --no-audit --no-fund; fi; \
+      if [ -f webui/package-lock.json ]; then npm ci --prefix webui --include=dev --no-audit --no-fund; else npm install --prefix webui --include=dev --no-audit --no-fund; fi; \
       npm run build --prefix webui; \
     fi; \
     if [ -f go.mod ]; then \
