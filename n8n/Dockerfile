@@ -55,7 +55,8 @@ RUN set -eux; \
 
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-RUN printf 'const http = require("http");\n\
+RUN cat > /proxy.js <<'EOF'\n\
+const http = require("http");\n\
 const net = require("net");\n\
 \n\
 const routes = [\n\
@@ -80,7 +81,7 @@ function proxyHttp(req, res) {\n\
     (upstreamRes) => {\n\
       res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);\n\
       upstreamRes.pipe(res);\n\
-    },\n\
+    }\n\
   );\n\
 \n\
   upstream.on("error", (err) => {\n\
@@ -114,9 +115,11 @@ function proxyUpgrade(req, socket, head) {\n\
   upstream.on("error", () => socket.destroy());\n\
 }\n\
 \n\
-http.createServer(proxyHttp).on("upgrade", proxyUpgrade).listen(8080, "0.0.0.0");\n' > /proxy.js
-
-RUN printf '#!/bin/bash\n\
+http.createServer(proxyHttp).on("upgrade", proxyUpgrade).listen(8080, "0.0.0.0");\n\
+EOF\n\
+\n\
+RUN cat > /run.sh <<'EOF'\n\
+#!/bin/bash\n\
 set -euo pipefail\n\
 \n\
 cd /app/MeiAI\n\
@@ -127,7 +130,7 @@ fi\n\
 \n\
 SESSION=main\n\
 if ! tmux has-session -t \"$SESSION\" 2>/dev/null; then\n\
-  tmux new-session -d -s \"$SESSION\" -n meiai \"bash -lc '\''cd /app/MeiAI && while true; do ./meiai; echo \\\"[meiai exited] restarting in 5s...\\\"; sleep 5; done'\''\"\n\
+  tmux new-session -d -s \"$SESSION\" -n meiai \"bash -lc 'cd /app/MeiAI && while true; do ./meiai; echo \\\"[meiai exited] restarting in 5s...\\\"; sleep 5; done'\"\n\
   tmux split-window -h -t \"$SESSION:0\" \"bash -lc 'while true; do clear; ram; sleep 5; done'\"\n\
   tmux split-window -v -t \"$SESSION:0.0\" \"bash\"\n\
   tmux select-layout -t \"$SESSION\" tiled\n\
@@ -135,7 +138,9 @@ fi\n\
 \n\
 ttyd -p 7681 -W -b /tmux tmux attach -t \"$SESSION\" &\n\
 exec node /proxy.js\n\
-' > /run.sh && chmod +x /run.sh
+EOF\n\
+\n\
+chmod +x /run.sh
 
 EXPOSE 8080
 
