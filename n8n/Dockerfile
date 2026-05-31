@@ -119,8 +119,6 @@ const meiaiProxy = createProxyMiddleware({
   xfwd: true
 });
 
-// KHÔNG dùng app.use("/tmux", ...)
-// Vì nó cắt mất prefix /tmux
 app.use((req, res, next) => {
   if (req.url.startsWith("/tmux")) {
     return tmuxProxy(req, res, next);
