@@ -101,17 +101,17 @@ app.get("/healthz", (req, res) => {
   res.status(200).send("ok");
 });
 
-// Chuyển hướng /tmux thành /tmux/ để ttyd nhận diện đúng asset
+// Chuyển hướng bắt buộc từ /tmux sang /tmux/ để tránh lỗi mất dấu gạch chéo làm sai đường dẫn asset
 app.get(/^\/tmux$/, (req, res) => {
   res.redirect(301, "/tmux/");
 });
 
-// Cấu hình proxy cho tmux (ttyd)
+// Cấu hình proxy cho ttyd (tmux)
 const tmuxProxy = createProxyMiddleware({
   target: "http://127.0.0.1:7681",
   changeOrigin: true,
   ws: true,
-  logger: console, // Log lỗi ra để dễ debug nếu có
+  logger: console // Log các request ra console để tiện theo dõi trên Render
 });
 
 // Cấu hình proxy cho MeiAI
@@ -119,22 +119,24 @@ const meiaiProxy = createProxyMiddleware({
   target: "http://127.0.0.1:5001",
   changeOrigin: true,
   ws: true,
-  logger: console,
+  logger: console
 });
 
-// Định tuyến HTTP Requests
+// QUAN TRỌNG: Đăng ký router tách biệt rõ ràng
+// Bất cứ request nào bắt đầu bằng /tmux (kể cả /tmux/error.css) đều PHẢI vào tmuxProxy
 app.use("/tmux", tmuxProxy);
+
+// Tất cả các request còn lại mới chuyển sang cho MeiAI
 app.use("/", (req, res, next) => {
-  // Nếu request không phải /tmux thì đẩy qua meiai
-  if (!req.url.startsWith("/tmux")) {
-    return meiaiProxy(req, res, next);
+  if (req.url.startsWith("/tmux")) {
+    return tmuxProxy(req, res, next);
   }
-  next();
+  return meiaiProxy(req, res, next);
 });
 
 const server = http.createServer(app);
 
-// Xử lý WebSocket Upgrade chính xác
+// Xử lý nâng cấp giao thức WebSocket cho cả 2 dịch vụ
 server.on("upgrade", (req, socket, head) => {
   if (req.url.startsWith("/tmux")) {
     tmuxProxy.upgrade(req, socket, head);
