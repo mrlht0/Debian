@@ -186,7 +186,24 @@ fi
 
 MEIAI_PORT=5001 nohup /MeiAI/start-meiai.sh > /tmp/meiai-watchdog.log 2>&1 &
 
-ttyd -i 127.0.0.1 -p 7681 -W -b /tmux /start-tmux.sh &
+SESSION=main
+
+tmux has-session -t "$SESSION" 2>/dev/null
+if [ $? != 0 ]; then
+    tmux new-session -d -s "$SESSION" -n cloud
+
+    tmux send-keys -t "$SESSION":0.0 "cd /MeiAI && tail -f meiai.log" C-m
+
+    tmux split-window -h -t "$SESSION":0.0
+    tmux send-keys -t "$SESSION":0.1 "htop" C-m
+
+    tmux split-window -v -t "$SESSION":0.1
+    tmux send-keys -t "$SESSION":0.2 "cd /MeiAI && bash" C-m
+
+    tmux select-layout -t "$SESSION" tiled
+fi
+
+ttyd -i 127.0.0.1 -p 7681 -W -b /tmux tmux attach-session -t "$SESSION" &
 
 sleep 2
 
