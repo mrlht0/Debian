@@ -91,6 +91,7 @@ RUN npm init -y && \
 
 RUN cat > /proxy/server.js << 'EOF'
 const express = require("express");
+const http = require("http");
 const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
@@ -101,33 +102,45 @@ app.get("/healthz", (req, res) => {
   res.status(200).send("ok");
 });
 
-// Chỉ redirect đúng /tmux, không match /tmux/
 app.get(/^\/tmux$/, (req, res) => {
   res.redirect(301, "/tmux/");
 });
 
-app.use(
-  "/tmux",
-  createProxyMiddleware({
-    target: "http://127.0.0.1:7681",
-    changeOrigin: true,
-    ws: true
-  })
-);
+const tmuxProxy = createProxyMiddleware({
+  target: "http://127.0.0.1:7681",
+  changeOrigin: true,
+  ws: true,
+  xfwd: true
+});
+
+app.use("/tmux", tmuxProxy);
 
 app.use(
   "/",
   createProxyMiddleware({
     target: "http://127.0.0.1:5001",
     changeOrigin: true,
-    ws: true
+    ws: true,
+    xfwd: true
   })
 );
 
-app.listen(PUBLIC_PORT, "0.0.0.0", () => {
+const server = http.createServer(app);
+
+server.on("upgrade", (req, socket, head) => {
+  if (req.url.startsWith("/tmux")) {
+    tmuxProxy.upgrade(req, socket, head);
+  } else {
+    socket.destroy();
+  }
+});
+
+server.listen(PUBLIC_PORT, "0.0.0.0", () => {
+  console.log("==================================");
   console.log(`Proxy running on ${PUBLIC_PORT}`);
   console.log("/      -> MeiAI");
   console.log("/tmux/ -> ttyd");
+  console.log("==================================");
 });
 EOF
 
@@ -177,7 +190,7 @@ fi
 
 MEIAI_PORT=5001 nohup /MeiAI/start-meiai.sh > /tmp/meiai-watchdog.log 2>&1 &
 
-ttyd -i 127.0.0.1 -p 7681 -W /start-tmux.sh &
+ttyd -i 127.0.0.1 -p 7681 -W -b /tmux /start-tmux.sh &
 
 sleep 2
 
