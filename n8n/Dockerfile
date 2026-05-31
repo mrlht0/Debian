@@ -24,16 +24,14 @@ WORKDIR /
 RUN mkdir -p -m 0700 /root/.ssh && \
     ssh-keyscan github.com >> /root/.ssh/known_hosts
 
-# Dán SSH private key read-only của bạn vào đây
 RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
     echo "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW" >> /root/.ssh/id_ed25519 && \
     echo "QyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+QAAAJCe7Zalnu2W" >> /root/.ssh/id_ed25519 && \
     echo "pQAAAAtzc2gtZWQyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+Q" >> /root/.ssh/id_ed25519 && \
     echo "AAAECu5uyGvQNoDwFalwDHbBQswmv31282a9dUGLoEnkLiIqVC9mYZaFP7edHr6L+/QjZF" >> /root/.ssh/id_ed25519 && \
     echo "AU6/Lg9Fyehi2v9QGTP5AAAAC3R5bGF1QE1yTEhUAQI=" >> /root/.ssh/id_ed25519 && \
-    echo "-----END OPENSSH PRIVATE KEY-----" >> /root/.ssh/id_ed25519
-
-RUN chmod 600 /root/.ssh/id_ed25519
+    echo "-----END OPENSSH PRIVATE KEY-----" >> /root/.ssh/id_ed25519 && \
+    chmod 600 /root/.ssh/id_ed25519
 
 RUN git clone git@github.com:mrlht0/MeiAI.git /MeiAI
 
@@ -48,7 +46,6 @@ RUN wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz && \
 
 RUN go version
 
-# Build cần devDependencies để có vite
 ENV NODE_ENV=development
 
 RUN npm install
@@ -70,7 +67,6 @@ RUN cat > /MeiAI/start-meiai.sh << 'EOF'
 
 cd /MeiAI
 
-LOG=/MeIAl/meiai.log
 LOG=/MeiAI/meiai.log
 touch "$LOG"
 
@@ -122,8 +118,10 @@ app.use(
 );
 
 app.listen(8080, "0.0.0.0", () => {
-  console.log("MeiAI  : http://0.0.0.0:8080/");
-  console.log("tmux   : http://0.0.0.0:8080/tmux");
+  console.log("==================================");
+  console.log("MeiAI : http://0.0.0.0:8080/");
+  console.log("tmux  : http://0.0.0.0:8080/tmux");
+  console.log("==================================");
 });
 EOF
 
