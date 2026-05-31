@@ -60,7 +60,6 @@ RUN go build -o meiai ./cmd/meiai
 RUN chmod +x /MeiAI/meiai
 
 ENV NODE_ENV=production
-ENV PORT=5001
 
 RUN cat > /MeiAI/start-meiai.sh << 'EOF'
 #!/bin/bash
@@ -75,7 +74,7 @@ do
     echo "==========================" >> "$LOG"
     echo "[START] $(date)" >> "$LOG"
 
-    PORT=5001 ./meiai >> "$LOG" 2>&1
+    PORT=${MEIAI_PORT:-5001} ./meiai >> "$LOG" 2>&1
     CODE=$?
 
     echo "[EXIT $CODE] MeiAI stopped, restarting in 5s..." >> "$LOG"
@@ -98,13 +97,25 @@ const app = express();
 
 const PUBLIC_PORT = process.env.PORT || 8080;
 
-const tmuxProxy = createProxyMiddleware({
-  target: "http://127.0.0.1:7681",
-  changeOrigin: true,
-  ws: true
+app.get("/healthz", (req, res) => {
+  res.status(200).send("ok");
 });
 
-app.use("/tmux", tmuxProxy);
+app.get("/tmux", (req, res) => {
+  res.redirect("/tmux/");
+});
+
+app.use(
+  "/tmux",
+  createProxyMiddleware({
+    target: "http://127.0.0.1:7681",
+    changeOrigin: true,
+    ws: true,
+    pathRewrite: {
+      "^/tmux": "/"
+    }
+  })
+);
 
 app.use(
   "/",
@@ -117,8 +128,9 @@ app.use(
 
 app.listen(PUBLIC_PORT, "0.0.0.0", () => {
   console.log("==================================");
-  console.log(`MeiAI : http://0.0.0.0:${PUBLIC_PORT}/`);
-  console.log(`tmux  : http://0.0.0.0:${PUBLIC_PORT}/tmux/`);
+  console.log(`Proxy : http://0.0.0.0:${PUBLIC_PORT}`);
+  console.log("/      -> MeiAI 127.0.0.1:5001");
+  console.log("/tmux/ -> ttyd 127.0.0.1:7681");
   console.log("==================================");
 });
 EOF
@@ -167,9 +179,9 @@ if [ -f /usr/local/bin/mem_guard.sh ]; then
     nohup /usr/local/bin/mem_guard.sh > /tmp/mem_guard.log 2>&1 &
 fi
 
-nohup /MeiAI/start-meiai.sh > /tmp/meiai-watchdog.log 2>&1 &
+MEIAI_PORT=5001 nohup /MeiAI/start-meiai.sh > /tmp/meiai-watchdog.log 2>&1 &
 
-ttyd -i 127.0.0.1 -p 7681 -W -b /tmux /start-tmux.sh &
+ttyd -i 127.0.0.1 -p 7681 -W /start-tmux.sh &
 
 sleep 2
 
