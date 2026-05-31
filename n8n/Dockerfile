@@ -3,7 +3,6 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV MEIAI_LITE_MODE=0
 ENV MEIAI_ADMIN_KEY=admin
-ENV PORT=5001
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 RUN apt update && apt install -y \
@@ -61,6 +60,7 @@ RUN go build -o meiai ./cmd/meiai
 RUN chmod +x /MeiAI/meiai
 
 ENV NODE_ENV=production
+ENV PORT=5001
 
 RUN cat > /MeiAI/start-meiai.sh << 'EOF'
 #!/bin/bash
@@ -75,7 +75,7 @@ do
     echo "==========================" >> "$LOG"
     echo "[START] $(date)" >> "$LOG"
 
-    ./meiai >> "$LOG" 2>&1
+    PORT=5001 ./meiai >> "$LOG" 2>&1
     CODE=$?
 
     echo "[EXIT $CODE] MeiAI stopped, restarting in 5s..." >> "$LOG"
@@ -96,17 +96,15 @@ const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
 
-app.use(
-  "/tmux",
-  createProxyMiddleware({
-    target: "http://127.0.0.1:7681",
-    changeOrigin: true,
-    ws: true,
-    pathRewrite: {
-      "^/tmux": ""
-    }
-  })
-);
+const PUBLIC_PORT = process.env.PORT || 8080;
+
+const tmuxProxy = createProxyMiddleware({
+  target: "http://127.0.0.1:7681",
+  changeOrigin: true,
+  ws: true
+});
+
+app.use("/tmux", tmuxProxy);
 
 app.use(
   "/",
@@ -117,10 +115,10 @@ app.use(
   })
 );
 
-app.listen(8080, "0.0.0.0", () => {
+app.listen(PUBLIC_PORT, "0.0.0.0", () => {
   console.log("==================================");
-  console.log("MeiAI : http://0.0.0.0:8080/");
-  console.log("tmux  : http://0.0.0.0:8080/tmux");
+  console.log(`MeiAI : http://0.0.0.0:${PUBLIC_PORT}/`);
+  console.log(`tmux  : http://0.0.0.0:${PUBLIC_PORT}/tmux/`);
   console.log("==================================");
 });
 EOF
@@ -171,7 +169,7 @@ fi
 
 nohup /MeiAI/start-meiai.sh > /tmp/meiai-watchdog.log 2>&1 &
 
-ttyd -i 127.0.0.1 -p 7681 -W /start-tmux.sh &
+ttyd -i 127.0.0.1 -p 7681 -W -b /tmux /start-tmux.sh &
 
 sleep 2
 
