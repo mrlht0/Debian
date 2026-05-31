@@ -95,7 +95,6 @@ const http = require("http");
 const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
-
 const PUBLIC_PORT = process.env.PORT || 8080;
 
 app.get("/healthz", (req, res) => {
@@ -113,17 +112,21 @@ const tmuxProxy = createProxyMiddleware({
   xfwd: true
 });
 
-app.use("/tmux", tmuxProxy);
+const meiaiProxy = createProxyMiddleware({
+  target: "http://127.0.0.1:5001",
+  changeOrigin: true,
+  ws: true,
+  xfwd: true
+});
 
-app.use(
-  "/",
-  createProxyMiddleware({
-    target: "http://127.0.0.1:5001",
-    changeOrigin: true,
-    ws: true,
-    xfwd: true
-  })
-);
+// KHÔNG dùng app.use("/tmux", ...)
+// Vì nó cắt mất prefix /tmux
+app.use((req, res, next) => {
+  if (req.url.startsWith("/tmux")) {
+    return tmuxProxy(req, res, next);
+  }
+  return meiaiProxy(req, res, next);
+});
 
 const server = http.createServer(app);
 
@@ -131,24 +134,17 @@ server.on("upgrade", (req, socket, head) => {
   if (req.url.startsWith("/tmux")) {
     tmuxProxy.upgrade(req, socket, head);
   } else {
-    socket.destroy();
+    meiaiProxy.upgrade(req, socket, head);
   }
 });
 
 server.listen(PUBLIC_PORT, "0.0.0.0", () => {
   console.log("==================================");
   console.log(`Proxy running on ${PUBLIC_PORT}`);
-  console.log("/      -> MeiAI");
-  console.log("/tmux/ -> ttyd");
+  console.log("/       -> MeiAI 5001");
+  console.log("/tmux/  -> ttyd 7681");
   console.log("==================================");
 });
-EOF
-
-RUN cat > /root/.tmux.conf << 'EOF'
-set -g mouse on
-set -g history-limit 10000
-setw -g mode-keys vi
-unbind -n MouseDown3Pane
 EOF
 
 RUN cat > /start-tmux.sh << 'EOF'
