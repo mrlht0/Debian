@@ -101,8 +101,9 @@ app.get("/healthz", (req, res) => {
   res.status(200).send("ok");
 });
 
-app.get("/tmux", (req, res) => {
-  res.redirect("/tmux/");
+// Chỉ redirect đúng /tmux, không match /tmux/
+app.get(/^\/tmux$/, (req, res) => {
+  res.redirect(301, "/tmux/");
 });
 
 app.use(
@@ -110,10 +111,7 @@ app.use(
   createProxyMiddleware({
     target: "http://127.0.0.1:7681",
     changeOrigin: true,
-    ws: true,
-    pathRewrite: {
-      "^/tmux": "/"
-    }
+    ws: true
   })
 );
 
@@ -127,11 +125,9 @@ app.use(
 );
 
 app.listen(PUBLIC_PORT, "0.0.0.0", () => {
-  console.log("==================================");
-  console.log(`Proxy : http://0.0.0.0:${PUBLIC_PORT}`);
-  console.log("/      -> MeiAI 127.0.0.1:5001");
-  console.log("/tmux/ -> ttyd 127.0.0.1:7681");
-  console.log("==================================");
+  console.log(`Proxy running on ${PUBLIC_PORT}`);
+  console.log("/      -> MeiAI");
+  console.log("/tmux/ -> ttyd");
 });
 EOF
 
