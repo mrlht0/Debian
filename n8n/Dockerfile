@@ -1,5 +1,10 @@
 # ==============================================================
-# Cloud Dev: ttyd + tmux + NGINX (Thay thế Caddy)
+# Cloud Dev: ttyd + tmux + TRAEFIK (Thay thế Caddy)
+# ==============================================================
+# ⚠️  Traefik thường dùng với Docker labels hoặc dynamic config files
+#     Ở đây dùng static + dynamic config file (phù hợp trong container)
+#     Ưu điểm: dashboard đẹp, hot-reload config, middleware phong phú
+#     Nhược điểm: nặng hơn (binary ~100MB), config phức tạp hơn Caddy
 # ==============================================================
 
 FROM debian:bookworm-slim
@@ -11,18 +16,25 @@ RUN apt update && apt install -y \
     bash curl wget git nano \
     procps htop tmux \
     ca-certificates \
-    nginx \
     tar net-tools \
     && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ─── 2. Cài đặt ttyd ─────────────────────────
+# ─── 2. Cài đặt Traefik ──────────────────────────────────────
+# Tải binary Traefik trực tiếp (không cần package manager)
+RUN wget -qO /tmp/traefik.tar.gz \
+    https://github.com/traefik/traefik/releases/download/v3.3.4/traefik_v3.3.4_linux_amd64.tar.gz && \
+    tar -xzf /tmp/traefik.tar.gz -C /usr/local/bin traefik && \
+    chmod +x /usr/local/bin/traefik && \
+    rm /tmp/traefik.tar.gz
+
+# ─── 3. Cài đặt ttyd ─────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
     chmod +x /usr/local/bin/ttyd
 
-# ─── 3. Cấu hình SSH & Clone repo ────────────────────────────
+# ─── 4. Cấu hình SSH & Clone repo ────────────────────────────
 WORKDIR /
 RUN apt-get update && apt-get install -y git openssh-client
 
@@ -42,7 +54,7 @@ RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
 
 WORKDIR /MeiAI
 
-# ─── 4. Cài Go & Build MeiAI ─────────────────────────────────
+# ─── 5. Cài Go & Build MeiAI ─────────────────────────────────
 RUN wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz \
     && rm -rf /usr/local/go \
     && tar -C /usr/local -xzf go1.24.3.linux-amd64.tar.gz \
@@ -62,7 +74,6 @@ ENV NODE_ENV=production \
     MEIAI_ADMIN_KEY=admin \
     PORT=5001
 
-# ─── 5. Script auto-restart MeiAI ────────────────────────────
 RUN printf '#!/bin/bash\n\
 cd /MeiAI\n\
 LOG=/MeiAI/meiai.log\n\
@@ -102,131 +113,299 @@ fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
-# ─── 7. Cài mem_guard ────────────────────────────────────────
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-# ─── 8. Cấu hình Nginx ───────────────────────────────────────
-# Nginx dùng map + location để route nhiều path
-# Khác Caddy: phải define từng upstream block riêng
-# Ưu điểm: hiệu năng cực cao, kiểm soát chi tiết header
-RUN rm -f /etc/nginx/sites-enabled/default && \
-printf '# ── Map để xử lý WebSocket upgrade đúng cách ──\n\
-# Nếu client gửi Upgrade header → set "upgrade", ngược lại → ""\n\
-# Dùng $connection_upgrade thay vì hardcode "upgrade" để HTTP thường không bị lỗi\n\
-map $http_upgrade $connection_upgrade {\n\
-    default   "";\n\
-    "websocket" "Upgrade";\n\
-}\n\
-\n\
-server {\n\
-    listen 8080;\n\
-\n\
-    # ── Terminal (ttyd phụ, bash thuần) ──\n\
-    # Dùng location /terminal/ (có trailing slash) để match đúng /terminal/ws\n\
-    # proxy_pass giữ nguyên path nhờ KHÔNG có URI sau địa chỉ upstream\n\
-    location /terminal {\n\
-        proxy_pass http://127.0.0.1:8082;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection $connection_upgrade;\n\
-        proxy_set_header Host $host;\n\
-        proxy_set_header X-Real-IP $remote_addr;\n\
-        proxy_read_timeout 86400s;\n\
-        proxy_send_timeout 86400s;\n\
-    }\n\
-\n\
-    # ── ttyd gốc (port 7681) ──\n\
-    location /ttyd {\n\
-        proxy_pass http://127.0.0.1:7681;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection $connection_upgrade;\n\
-        proxy_set_header Host $host;\n\
-        proxy_set_header X-Real-IP $remote_addr;\n\
-        proxy_read_timeout 86400s;\n\
-        proxy_send_timeout 86400s;\n\
-    }\n\
-\n\
-    # ── Tmux session ──\n\
-    location /tmux {\n\
-        proxy_pass http://127.0.0.1:8081;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection $connection_upgrade;\n\
-        proxy_set_header Host $host;\n\
-        proxy_set_header X-Real-IP $remote_addr;\n\
-        proxy_read_timeout 86400s;\n\
-        proxy_send_timeout 86400s;\n\
-    }\n\
-\n\
-    # ── OpenClaw ──\n\
-    location /openclaw {\n\
-        proxy_pass http://127.0.0.1:18789;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection "upgrade";\n\
-        proxy_set_header Host $host;\n\
-    }\n\
-\n\
-    # ── MeiAI ──\n\
-    location /meiai {\n\
-        proxy_pass http://127.0.0.1:5001;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection "upgrade";\n\
-        proxy_set_header Host $host;\n\
-    }\n\
-\n\
-    # ── Port 10000 (vừa prefix vừa mặc định) ──\n\
-    location /10000 {\n\
-        proxy_pass http://127.0.0.1:10000;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection "upgrade";\n\
-        proxy_set_header Host $host;\n\
-    }\n\
-\n\
-    # ── Các port hàng loạt 8083-8089 ──\n\
-    location /8083 { proxy_pass http://127.0.0.1:8083; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-    location /8084 { proxy_pass http://127.0.0.1:8084; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-    location /8085 { proxy_pass http://127.0.0.1:8085; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-    location /8086 { proxy_pass http://127.0.0.1:8086; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-    location /8087 { proxy_pass http://127.0.0.1:8087; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-    location /8088 { proxy_pass http://127.0.0.1:8088; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-    location /8089 { proxy_pass http://127.0.0.1:8089; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-\n\
-    # ── Port 10001-10003 ──\n\
-    location /10001 { proxy_pass http://127.0.0.1:10001; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-    location /10002 { proxy_pass http://127.0.0.1:10002; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-    location /10003 { proxy_pass http://127.0.0.1:10003; proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
-\n\
-    # ── Mặc định: forward tới 10000 (strip prefix) ──\n\
-    location / {\n\
-        proxy_pass http://127.0.0.1:10000;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header Upgrade $http_upgrade;\n\
-        proxy_set_header Connection "upgrade";\n\
-        proxy_set_header Host $host;\n\
-    }\n\
-}\n' > /etc/nginx/conf.d/clouddev.conf
+# ─── 7. Cấu hình Traefik ─────────────────────────────────────
+# Traefik chia làm 2 file:
+#   - traefik.yml: static config (entrypoints, providers, dashboard)
+#   - dynamic.yml: dynamic config (routers, services) — hot-reload được
 
-# ─── 9. Script khởi chạy ─────────────────────────────────────
+RUN mkdir -p /etc/traefik
+
+# Static config
+RUN printf 'api:\n\
+  dashboard: true    # Dashboard tại http://host:8090/dashboard/\n\
+  insecure: true\n\
+\n\
+entryPoints:\n\
+  web:\n\
+    address: ":8080"\n\
+\n\
+providers:\n\
+  file:\n\
+    filename: /etc/traefik/dynamic.yml\n\
+    watch: true      # Tự reload khi file thay đổi (hot-reload)\n\
+\n\
+log:\n\
+  level: INFO\n\
+\n\
+# Traefik lắng nghe dashboard tại port 8090\n\
+# Truy cập: http://host:8090/dashboard/\n\
+' > /etc/traefik/traefik.yml
+
+# Dynamic config (routers + services + middlewares)
+# Traefik dùng PathPrefix rule, khác Caddy dùng handle
+RUN printf 'http:\n\
+  middlewares:\n\
+    # Middleware strip prefix cho từng path\n\
+    strip-terminal:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/terminal"\n\
+    strip-ttyd:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/ttyd"\n\
+    strip-tmux:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/tmux"\n\
+    strip-openclaw:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/openclaw"\n\
+    strip-meiai:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/meiai"\n\
+    strip-10000:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/10000"\n\
+    strip-8083:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/8083"\n\
+    strip-8084:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/8084"\n\
+    strip-8085:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/8085"\n\
+    strip-8086:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/8086"\n\
+    strip-8087:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/8087"\n\
+    strip-8088:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/8088"\n\
+    strip-8089:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/8089"\n\
+    strip-10001:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/10001"\n\
+    strip-10002:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/10002"\n\
+    strip-10003:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/10003"\n\
+\n\
+  routers:\n\
+    terminal:\n\
+      rule: "PathPrefix(`/terminal`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-terminal]\n\
+      service: svc-terminal\n\
+      priority: 100\n\
+\n\
+    ttyd:\n\
+      rule: "PathPrefix(`/ttyd`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-ttyd]\n\
+      service: svc-ttyd\n\
+      priority: 100\n\
+\n\
+    tmux:\n\
+      rule: "PathPrefix(`/tmux`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-tmux]\n\
+      service: svc-tmux\n\
+      priority: 100\n\
+\n\
+    openclaw:\n\
+      rule: "PathPrefix(`/openclaw`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-openclaw]\n\
+      service: svc-openclaw\n\
+      priority: 100\n\
+\n\
+    meiai:\n\
+      rule: "PathPrefix(`/meiai`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-meiai]\n\
+      service: svc-meiai\n\
+      priority: 100\n\
+\n\
+    route-10000:\n\
+      rule: "PathPrefix(`/10000`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-10000]\n\
+      service: svc-10000\n\
+      priority: 100\n\
+\n\
+    route-8083:\n\
+      rule: "PathPrefix(`/8083`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-8083]\n\
+      service: svc-8083\n\
+      priority: 100\n\
+\n\
+    route-8084:\n\
+      rule: "PathPrefix(`/8084`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-8084]\n\
+      service: svc-8084\n\
+      priority: 100\n\
+\n\
+    route-8085:\n\
+      rule: "PathPrefix(`/8085`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-8085]\n\
+      service: svc-8085\n\
+      priority: 100\n\
+\n\
+    route-8086:\n\
+      rule: "PathPrefix(`/8086`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-8086]\n\
+      service: svc-8086\n\
+      priority: 100\n\
+\n\
+    route-8087:\n\
+      rule: "PathPrefix(`/8087`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-8087]\n\
+      service: svc-8087\n\
+      priority: 100\n\
+\n\
+    route-8088:\n\
+      rule: "PathPrefix(`/8088`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-8088]\n\
+      service: svc-8088\n\
+      priority: 100\n\
+\n\
+    route-8089:\n\
+      rule: "PathPrefix(`/8089`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-8089]\n\
+      service: svc-8089\n\
+      priority: 100\n\
+\n\
+    route-10001:\n\
+      rule: "PathPrefix(`/10001`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-10001]\n\
+      service: svc-10001\n\
+      priority: 100\n\
+\n\
+    route-10002:\n\
+      rule: "PathPrefix(`/10002`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-10002]\n\
+      service: svc-10002\n\
+      priority: 100\n\
+\n\
+    route-10003:\n\
+      rule: "PathPrefix(`/10003`)"\n\
+      entryPoints: [web]\n\
+      middlewares: [strip-10003]\n\
+      service: svc-10003\n\
+      priority: 100\n\
+\n\
+    # Catch-all: forward tới 10000\n\
+    catchall:\n\
+      rule: "PathPrefix(`/`)"\n\
+      entryPoints: [web]\n\
+      service: svc-10000\n\
+      priority: 1\n\
+\n\
+  services:\n\
+    svc-terminal:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8082"\n\
+    svc-ttyd:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:7681"\n\
+    svc-tmux:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8081"\n\
+    svc-openclaw:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:18789"\n\
+    svc-meiai:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:5001"\n\
+    svc-10000:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:10000"\n\
+    svc-8083:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8083"\n\
+    svc-8084:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8084"\n\
+    svc-8085:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8085"\n\
+    svc-8086:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8086"\n\
+    svc-8087:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8087"\n\
+    svc-8088:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8088"\n\
+    svc-8089:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8089"\n\
+    svc-10001:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:10001"\n\
+    svc-10002:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:10002"\n\
+    svc-10003:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:10003"\n\
+' > /etc/traefik/dynamic.yml
+
+# ─── 8. Script khởi chạy ─────────────────────────────────────
 RUN printf '#!/bin/bash\n\
-echo "Đang khởi động dịch vụ Cloud Dev (Nginx)..."\n\
+echo "Đang khởi động dịch vụ Cloud Dev (Traefik)..."\n\
 \n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
-# Watchdog MeiAI\n\
 (\n\
 while true; do\n\
     pgrep -f start-meiai.sh >/dev/null || nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
@@ -238,13 +417,14 @@ ttyd -p 8081 -W -b /tmux /start.sh &\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 sleep 1\n\
-echo "Nginx đang chạy..."\n\
-# Nginx chạy foreground (-g "daemon off;")\n\
-exec nginx -g "daemon off;"\n\
+echo "Traefik đang chạy..."\n\
+echo "Dashboard: http://host:8090/dashboard/"\n\
+# Traefik đọc static config từ file\n\
+exec traefik --configFile=/etc/traefik/traefik.yml\n\
 ' > /run.sh && chmod +x /run.sh
 
-EXPOSE 8080
+EXPOSE 8080 8090
 CMD ["/run.sh"]
 
-# Reload nginx khi cần:
-# nginx -s reload
+# Hot-reload: chỉ cần sửa /etc/traefik/dynamic.yml, Traefik tự reload
+# Dashboard: http://host:8090/dashboard/
