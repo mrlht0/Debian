@@ -1,10 +1,10 @@
 # ==============================================================
-# Cloud Dev: ttyd + tmux + TRAEFIK (Thay thế Caddy)
+# Cloud Dev: ttyd + tmux + NODE.JS http-proxy (Thay thế Caddy)
 # ==============================================================
-# ⚠️  Traefik thường dùng với Docker labels hoặc dynamic config files
-#     Ở đây dùng static + dynamic config file (phù hợp trong container)
-#     Ưu điểm: dashboard đẹp, hot-reload config, middleware phong phú
-#     Nhược điểm: nặng hơn (binary ~100MB), config phức tạp hơn Caddy
+# ⚠️  Dùng Node.js http-proxy-middleware (đã có sẵn Node trong image)
+#     Ưu điểm: không cần cài thêm gì, logic tùy biến hoàn toàn bằng JS
+#     Phù hợp khi đã có Node.js và muốn proxy động (thêm/xóa route lúc runtime)
+#     Nhược điểm: hiệu năng thấp hơn Nginx/HAProxy với tải cao
 # ==============================================================
 
 FROM debian:bookworm-slim
@@ -21,20 +21,12 @@ RUN apt update && apt install -y \
     && apt-get install -y nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ─── 2. Cài đặt Traefik ──────────────────────────────────────
-# Tải binary Traefik trực tiếp (không cần package manager)
-RUN wget -qO /tmp/traefik.tar.gz \
-    https://github.com/traefik/traefik/releases/download/v3.3.4/traefik_v3.3.4_linux_amd64.tar.gz && \
-    tar -xzf /tmp/traefik.tar.gz -C /usr/local/bin traefik && \
-    chmod +x /usr/local/bin/traefik && \
-    rm /tmp/traefik.tar.gz
-
-# ─── 3. Cài đặt ttyd ─────────────────────────
+# ─── 2. Cài đặt ttyd ─────────────────────────
 RUN wget -O /usr/local/bin/ttyd \
     https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
     chmod +x /usr/local/bin/ttyd
 
-# ─── 4. Cấu hình SSH & Clone repo ────────────────────────────
+# ─── 3. Cấu hình SSH & Clone repo ────────────────────────────
 WORKDIR /
 RUN apt-get update && apt-get install -y git openssh-client
 
@@ -54,7 +46,7 @@ RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
 
 WORKDIR /MeiAI
 
-# ─── 5. Cài Go & Build MeiAI ─────────────────────────────────
+# ─── 4. Cài Go & Build MeiAI ─────────────────────────────────
 RUN wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz \
     && rm -rf /usr/local/go \
     && tar -C /usr/local -xzf go1.24.3.linux-amd64.tar.gz \
@@ -92,7 +84,7 @@ while true; do\n\
 done\n\
 ' > /MeiAI/start-meiai.sh && chmod +x /MeiAI/start-meiai.sh
 
-# ─── 6. Cấu hình Bash & Tmux ─────────────────────────────────
+# ─── 5. Cấu hình Bash & Tmux ─────────────────────────────────
 WORKDIR /
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
 
@@ -115,294 +107,115 @@ exec tmux attach -t $SESSION\n\
 
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-# ─── 7. Cấu hình Traefik ─────────────────────────────────────
-# Traefik chia làm 2 file:
-#   - traefik.yml: static config (entrypoints, providers, dashboard)
-#   - dynamic.yml: dynamic config (routers, services) — hot-reload được
+# ─── 6. Tạo Node.js proxy server ─────────────────────────────
+# Cài http-proxy (nhẹ, hỗ trợ WebSocket tốt)
+RUN mkdir -p /proxy && cd /proxy && \
+    npm init -y && \
+    npm install http-proxy
 
-RUN mkdir -p /etc/traefik
+# Viết proxy.js hoàn chỉnh
+RUN cat > /proxy/proxy.js << 'PROXYEOF'
+/**
+ * Node.js Reverse Proxy
+ * Thay thế Caddy - route theo path prefix
+ * Hỗ trợ HTTP + WebSocket upgrade
+ */
+const http = require('http');
+const httpProxy = require('http-proxy');
 
-# Static config
-RUN printf 'api:\n\
-  dashboard: true    # Dashboard tại http://host:8090/dashboard/\n\
-  insecure: true\n\
-\n\
-entryPoints:\n\
-  web:\n\
-    address: ":8080"\n\
-\n\
-providers:\n\
-  file:\n\
-    filename: /etc/traefik/dynamic.yml\n\
-    watch: true      # Tự reload khi file thay đổi (hot-reload)\n\
-\n\
-log:\n\
-  level: INFO\n\
-\n\
-# Traefik lắng nghe dashboard tại port 8090\n\
-# Truy cập: http://host:8090/dashboard/\n\
-' > /etc/traefik/traefik.yml
+const proxy = httpProxy.createProxyServer({
+  ws: true,          // Bật WebSocket
+  xfwd: true,        // Thêm X-Forwarded-* headers
+});
 
-# Dynamic config (routers + services + middlewares)
-# Traefik dùng PathPrefix rule, khác Caddy dùng handle
-RUN printf 'http:\n\
-  middlewares:\n\
-    # Middleware strip prefix cho từng path\n\
-    strip-terminal:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/terminal"\n\
-    strip-ttyd:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/ttyd"\n\
-    strip-tmux:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/tmux"\n\
-    strip-openclaw:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/openclaw"\n\
-    strip-meiai:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/meiai"\n\
-    strip-10000:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/10000"\n\
-    strip-8083:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/8083"\n\
-    strip-8084:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/8084"\n\
-    strip-8085:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/8085"\n\
-    strip-8086:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/8086"\n\
-    strip-8087:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/8087"\n\
-    strip-8088:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/8088"\n\
-    strip-8089:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/8089"\n\
-    strip-10001:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/10001"\n\
-    strip-10002:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/10002"\n\
-    strip-10003:\n\
-      stripPrefix:\n\
-        prefixes:\n\
-          - "/10003"\n\
-\n\
-  routers:\n\
-    terminal:\n\
-      rule: "PathPrefix(`/terminal`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-terminal]\n\
-      service: svc-terminal\n\
-      priority: 100\n\
-\n\
-    ttyd:\n\
-      rule: "PathPrefix(`/ttyd`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-ttyd]\n\
-      service: svc-ttyd\n\
-      priority: 100\n\
-\n\
-    tmux:\n\
-      rule: "PathPrefix(`/tmux`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-tmux]\n\
-      service: svc-tmux\n\
-      priority: 100\n\
-\n\
-    openclaw:\n\
-      rule: "PathPrefix(`/openclaw`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-openclaw]\n\
-      service: svc-openclaw\n\
-      priority: 100\n\
-\n\
-    meiai:\n\
-      rule: "PathPrefix(`/meiai`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-meiai]\n\
-      service: svc-meiai\n\
-      priority: 100\n\
-\n\
-    route-10000:\n\
-      rule: "PathPrefix(`/10000`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-10000]\n\
-      service: svc-10000\n\
-      priority: 100\n\
-\n\
-    route-8083:\n\
-      rule: "PathPrefix(`/8083`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-8083]\n\
-      service: svc-8083\n\
-      priority: 100\n\
-\n\
-    route-8084:\n\
-      rule: "PathPrefix(`/8084`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-8084]\n\
-      service: svc-8084\n\
-      priority: 100\n\
-\n\
-    route-8085:\n\
-      rule: "PathPrefix(`/8085`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-8085]\n\
-      service: svc-8085\n\
-      priority: 100\n\
-\n\
-    route-8086:\n\
-      rule: "PathPrefix(`/8086`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-8086]\n\
-      service: svc-8086\n\
-      priority: 100\n\
-\n\
-    route-8087:\n\
-      rule: "PathPrefix(`/8087`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-8087]\n\
-      service: svc-8087\n\
-      priority: 100\n\
-\n\
-    route-8088:\n\
-      rule: "PathPrefix(`/8088`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-8088]\n\
-      service: svc-8088\n\
-      priority: 100\n\
-\n\
-    route-8089:\n\
-      rule: "PathPrefix(`/8089`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-8089]\n\
-      service: svc-8089\n\
-      priority: 100\n\
-\n\
-    route-10001:\n\
-      rule: "PathPrefix(`/10001`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-10001]\n\
-      service: svc-10001\n\
-      priority: 100\n\
-\n\
-    route-10002:\n\
-      rule: "PathPrefix(`/10002`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-10002]\n\
-      service: svc-10002\n\
-      priority: 100\n\
-\n\
-    route-10003:\n\
-      rule: "PathPrefix(`/10003`)"\n\
-      entryPoints: [web]\n\
-      middlewares: [strip-10003]\n\
-      service: svc-10003\n\
-      priority: 100\n\
-\n\
-    # Catch-all: forward tới 10000\n\
-    catchall:\n\
-      rule: "PathPrefix(`/`)"\n\
-      entryPoints: [web]\n\
-      service: svc-10000\n\
-      priority: 1\n\
-\n\
-  services:\n\
-    svc-terminal:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8082"\n\
-    svc-ttyd:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:7681"\n\
-    svc-tmux:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8081"\n\
-    svc-openclaw:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:18789"\n\
-    svc-meiai:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:5001"\n\
-    svc-10000:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:10000"\n\
-    svc-8083:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8083"\n\
-    svc-8084:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8084"\n\
-    svc-8085:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8085"\n\
-    svc-8086:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8086"\n\
-    svc-8087:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8087"\n\
-    svc-8088:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8088"\n\
-    svc-8089:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:8089"\n\
-    svc-10001:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:10001"\n\
-    svc-10002:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:10002"\n\
-    svc-10003:\n\
-      loadBalancer:\n\
-        servers:\n\
-          - url: "http://127.0.0.1:10003"\n\
-' > /etc/traefik/dynamic.yml
+// Bảng route: path prefix → target port
+//
+// ⚠️  QUAN TRỌNG - ttyd và strip prefix:
+//     ttyd dùng -b /tmux để inject đúng prefix vào HTML (asset links, token URL, ws URL)
+//     Nên proxy KHÔNG được strip prefix → ttyd nhận /tmux/ws và tự xử lý đúng
+//     Nếu strip → ttyd nhận /ws, HTML vẫn link tới /tmux/ws → browser gọi /tmux/ws
+//     → proxy forward tới ttyd thành /ws → OK... nhưng token endpoint lại link sai
+//     Kết luận: strip: false cho mọi ttyd route
+//
+// strip: false → giữ nguyên path (ttyd tự handle nhờ -b flag)
+const routes = [
+  { prefix: '/terminal',  target: 'http://127.0.0.1:8082', strip: false },
+  { prefix: '/ttyd',      target: 'http://127.0.0.1:7681', strip: false },
+  { prefix: '/tmux',      target: 'http://127.0.0.1:8081', strip: false },
+  { prefix: '/openclaw',  target: 'http://127.0.0.1:18789',strip: false },
+  { prefix: '/meiai',     target: 'http://127.0.0.1:5001', strip: false },
+  { prefix: '/10000',     target: 'http://127.0.0.1:10000',strip: false },
+  { prefix: '/8083',      target: 'http://127.0.0.1:8083', strip: false },
+  { prefix: '/8084',      target: 'http://127.0.0.1:8084', strip: false },
+  { prefix: '/8085',      target: 'http://127.0.0.1:8085', strip: false },
+  { prefix: '/8086',      target: 'http://127.0.0.1:8086', strip: false },
+  { prefix: '/8087',      target: 'http://127.0.0.1:8087', strip: false },
+  { prefix: '/8088',      target: 'http://127.0.0.1:8088', strip: false },
+  { prefix: '/8089',      target: 'http://127.0.0.1:8089', strip: false },
+  { prefix: '/10001',     target: 'http://127.0.0.1:10001',strip: false },
+  { prefix: '/10002',     target: 'http://127.0.0.1:10002',strip: false },
+  { prefix: '/10003',     target: 'http://127.0.0.1:10003',strip: false },
+  // Catch-all: mặc định forward tới 10000
+  { prefix: '/',          target: 'http://127.0.0.1:10000',strip: false },
+];
 
-# ─── 8. Script khởi chạy ─────────────────────────────────────
+function findRoute(url) {
+  for (const route of routes) {
+    if (url.startsWith(route.prefix)) return route;
+  }
+  return { target: 'http://127.0.0.1:10000', strip: false, prefix: '/' };
+}
+
+// Rewrite URL: strip prefix nếu cần
+// /tmux/ws?arg=1  →  /ws?arg=1
+// /tmux           →  /
+function rewriteUrl(url, route) {
+  if (!route.strip) return url;
+  const stripped = url.slice(route.prefix.length) || '/';
+  // Đảm bảo luôn bắt đầu bằng /
+  return stripped.startsWith('/') ? stripped : '/' + stripped;
+}
+
+proxy.on('error', (err, req, res) => {
+  console.error(`[PROXY ERROR] ${req.url}: ${err.message}`);
+  if (res && !res.headersSent) {
+    res.writeHead(502, { 'Content-Type': 'text/plain' });
+    res.end(`Proxy error: ${err.message}`);
+  }
+});
+
+// HTTP server
+const server = http.createServer((req, res) => {
+  const route = findRoute(req.url || '/');
+  const originalUrl = req.url;
+  req.url = rewriteUrl(req.url, route);
+  console.log(`[HTTP] ${req.method} ${originalUrl} → ${route.target}${req.url}`);
+  proxy.web(req, res, { target: route.target });
+});
+
+// WebSocket upgrade — quan trọng: cũng phải rewrite URL
+server.on('upgrade', (req, socket, head) => {
+  const route = findRoute(req.url || '/');
+  const originalUrl = req.url;
+  req.url = rewriteUrl(req.url, route);
+  console.log(`[WS]   UPGRADE ${originalUrl} → ${route.target}${req.url}`);
+  proxy.ws(req, socket, head, { target: route.target });
+});
+
+server.listen(8080, '0.0.0.0', () => {
+  console.log('Node.js Proxy đang chạy tại http://0.0.0.0:8080');
+  console.log('Routes:');
+  routes.forEach(r => console.log(`  ${r.prefix.padEnd(12)} → ${r.target}`));
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => { server.close(); process.exit(0); });
+process.on('SIGINT',  () => { server.close(); process.exit(0); });
+PROXYEOF
+
+# ─── 7. Script khởi chạy ─────────────────────────────────────
 RUN printf '#!/bin/bash\n\
-echo "Đang khởi động dịch vụ Cloud Dev (Traefik)..."\n\
+echo "Đang khởi động dịch vụ Cloud Dev (Node.js Proxy)..."\n\
 \n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
@@ -413,18 +226,18 @@ while true; do\n\
 done\n\
 ) &\n\
 \n\
+# ttyd PHẢI dùng -b để inject đúng prefix vào HTML\n\
+# Proxy giữ nguyên path, ttyd tự xử lý /tmux/ws, /tmux/token, ...\n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 sleep 1\n\
-echo "Traefik đang chạy..."\n\
-echo "Dashboard: http://host:8090/dashboard/"\n\
-# Traefik đọc static config từ file\n\
-exec traefik --configFile=/etc/traefik/traefik.yml\n\
+echo "Node.js Proxy đang chạy..."\n\
+exec node /proxy/proxy.js\n\
 ' > /run.sh && chmod +x /run.sh
 
-EXPOSE 8080 8090
+EXPOSE 8080
 CMD ["/run.sh"]
 
-# Hot-reload: chỉ cần sửa /etc/traefik/dynamic.yml, Traefik tự reload
-# Dashboard: http://host:8090/dashboard/
+# Thêm route động lúc runtime: sửa /proxy/proxy.js rồi restart node
+# pm2 start /proxy/proxy.js --watch   # nếu muốn auto-reload khi sửa file
