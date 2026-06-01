@@ -103,10 +103,10 @@ RUN printf '%s\n' '#!/bin/sh' \
     '  touch /home/node/.n8n/.ram-workflow-imported' \
     'fi' \
     'exec n8n start' \
-    > /usr/local/bin/start-n8n.sh && chmod +x /usr/local/bin/start-n8n.sh
+    > /home/node/start-n8n.sh && chmod +x /home/node/start-n8n.sh
 
 # Only one public port exists; Render will map its PORT to this container.
 EXPOSE 8080
 
 # Run the direct n8n server. No proxy layer means no proxy-related browser warning.
-CMD ["/usr/local/bin/start-n8n.sh"]
+CMD ["/home/node/start-n8n.sh"]
