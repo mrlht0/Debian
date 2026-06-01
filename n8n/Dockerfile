@@ -129,14 +129,20 @@ const proxy = httpProxy.createProxyServer({
 });
 
 // Bảng route: path prefix → target port
-// strip: true  → xóa prefix trước khi forward đến upstream
-//               VD: /tmux/ws → /ws  (ttyd cần nhận / chứ không phải /tmux/)
-// strip: false → giữ nguyên path (upstream tự handle prefix)
+//
+// ⚠️  QUAN TRỌNG - ttyd và strip prefix:
+//     ttyd dùng -b /tmux để inject đúng prefix vào HTML (asset links, token URL, ws URL)
+//     Nên proxy KHÔNG được strip prefix → ttyd nhận /tmux/ws và tự xử lý đúng
+//     Nếu strip → ttyd nhận /ws, HTML vẫn link tới /tmux/ws → browser gọi /tmux/ws
+//     → proxy forward tới ttyd thành /ws → OK... nhưng token endpoint lại link sai
+//     Kết luận: strip: false cho mọi ttyd route
+//
+// strip: false → giữ nguyên path (ttyd tự handle nhờ -b flag)
 const routes = [
-  { prefix: '/terminal',  target: 'http://127.0.0.1:8082', strip: true  },
-  { prefix: '/ttyd',      target: 'http://127.0.0.1:7681', strip: true  },
-  { prefix: '/tmux',      target: 'http://127.0.0.1:8081', strip: true  },
-  { prefix: '/openclaw',  target: 'http://127.0.0.1:18789',strip: true  },
+  { prefix: '/terminal',  target: 'http://127.0.0.1:8082', strip: false },
+  { prefix: '/ttyd',      target: 'http://127.0.0.1:7681', strip: false },
+  { prefix: '/tmux',      target: 'http://127.0.0.1:8081', strip: false },
+  { prefix: '/openclaw',  target: 'http://127.0.0.1:18789',strip: false },
   { prefix: '/meiai',     target: 'http://127.0.0.1:5001', strip: false },
   { prefix: '/10000',     target: 'http://127.0.0.1:10000',strip: false },
   { prefix: '/8083',      target: 'http://127.0.0.1:8083', strip: false },
@@ -220,13 +226,13 @@ while true; do\n\
 done\n\
 ) &\n\
 \n\
-# Không cần -b vì proxy.js đã strip prefix trước khi forward\n\
-ttyd -p 8081 -W /start.sh &\n\
-ttyd -p 8082 -W bash &\n\
+# ttyd PHẢI dùng -b để inject đúng prefix vào HTML\n\
+# Proxy giữ nguyên path, ttyd tự xử lý /tmux/ws, /tmux/token, ...\n\
+ttyd -p 8081 -W -b /tmux /start.sh &\n\
+ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 sleep 1\n\
 echo "Node.js Proxy đang chạy..."\n\
-# Node.js proxy chạy foreground\n\
 exec node /proxy/proxy.js\n\
 ' > /run.sh && chmod +x /run.sh
 
