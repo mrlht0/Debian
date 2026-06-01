@@ -54,9 +54,9 @@ const PUBLIC_PORT = Number(process.env.PORT || 8080);
 const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
 
 // RAM endpoint protection:
-// - query string:  /ram?token=...
-// - header:        x-ram-token: ...
-const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
+// - leave RAM_TOKEN empty to keep /ram public
+// - set RAM_TOKEN to require ?token=... or x-ram-token
+const RAM_TOKEN = process.env.RAM_TOKEN || '';
 
 // Optional database for cost history.
 // If MONGODB_URI is missing, the RAM endpoint still works.
@@ -341,11 +341,36 @@ function startN8n() {
   return child;
 }
 
+function waitForPort(host, port, timeoutMs = 120000) {
+  const net = require('node:net');
+  const startedAt = Date.now();
+
+  return new Promise((resolve, reject) => {
+    const probe = () => {
+      const socket = net.connect(port, host);
+      socket.once('connect', () => {
+        socket.end();
+        resolve(true);
+      });
+      socket.once('error', () => {
+        socket.destroy();
+        if (Date.now() - startedAt >= timeoutMs) {
+          reject(new Error(`Timed out waiting for ${host}:${port}`));
+          return;
+        }
+        setTimeout(probe, 1000);
+      });
+    };
+
+    probe();
+  });
+}
+
 async function handleRamRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
   const token = url.searchParams.get('token') || req.headers['x-ram-token'];
 
-  if (token !== RAM_TOKEN) {
+  if (RAM_TOKEN && token !== RAM_TOKEN) {
     sendJson(res, 401, { error: 'Unauthorized' });
     return;
   }
@@ -360,6 +385,8 @@ async function handleRamRequest(req, res) {
 }
 
 // This proxy keeps one public URL while forwarding everything except /ram to n8n.
+let n8nReady = false;
+
 const proxy = httpProxy.createProxyServer({
   target: `http://127.0.0.1:${INTERNAL_N8N_PORT}`,
   ws: true,
@@ -377,6 +404,11 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/ram') {
     await handleRamRequest(req, res);
+    return;
+  }
+
+  if (!n8nReady) {
+    sendText(res, 503, 'n8n is starting');
     return;
   }
 
@@ -409,9 +441,17 @@ process.on('SIGINT', () => shutdown(0));
 // 1) n8n backend
 // 2) public proxy + /ram endpoint
 n8nChild = startN8n();
-server.listen(PUBLIC_PORT, '0.0.0.0', () => {
-  console.log(`Public wrapper listening on 0.0.0.0:${PUBLIC_PORT}`);
-});
+waitForPort('127.0.0.1', INTERNAL_N8N_PORT)
+  .then(() => {
+    n8nReady = true;
+    server.listen(PUBLIC_PORT, '0.0.0.0', () => {
+      console.log(`Public wrapper listening on 0.0.0.0:${PUBLIC_PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
 EOF
 
 # Runtime files are owned by the non-root n8n user so the container can run safely.
