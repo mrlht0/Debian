@@ -1,10 +1,5 @@
 # ==============================================================
-# Cloud Dev: ttyd + tmux + NODE.JS http-proxy (Thay thế Caddy)
-# ==============================================================
-# ⚠️  Dùng Node.js http-proxy-middleware (đã có sẵn Node trong image)
-#     Ưu điểm: không cần cài thêm gì, logic tùy biến hoàn toàn bằng JS
-#     Phù hợp khi đã có Node.js và muốn proxy động (thêm/xóa route lúc runtime)
-#     Nhược điểm: hiệu năng thấp hơn Nginx/HAProxy với tải cao
+# Cloud Dev: ttyd + tmux + NGINX (Thay thế Caddy)
 # ==============================================================
 
 FROM debian:bookworm-slim
@@ -16,6 +11,7 @@ RUN apt update && apt install -y \
     bash curl wget git nano \
     procps htop tmux \
     ca-certificates \
+    nginx \
     tar net-tools \
     && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
     && apt-get install -y nodejs \
@@ -66,6 +62,7 @@ ENV NODE_ENV=production \
     MEIAI_ADMIN_KEY=admin \
     PORT=5001
 
+# ─── 5. Script auto-restart MeiAI ────────────────────────────
 RUN printf '#!/bin/bash\n\
 cd /MeiAI\n\
 LOG=/MeiAI/meiai.log\n\
@@ -84,7 +81,7 @@ while true; do\n\
 done\n\
 ' > /MeiAI/start-meiai.sh && chmod +x /MeiAI/start-meiai.sh
 
-# ─── 5. Cấu hình Bash & Tmux ─────────────────────────────────
+# ─── 6. Cấu hình Bash & Tmux ─────────────────────────────────
 WORKDIR /
 RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
 
@@ -105,120 +102,131 @@ fi\n\
 exec tmux attach -t $SESSION\n\
 ' > /start.sh && chmod +x /start.sh
 
+# ─── 7. Cài mem_guard ────────────────────────────────────────
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-# ─── 6. Tạo Node.js proxy server ─────────────────────────────
-# Cài http-proxy (nhẹ, hỗ trợ WebSocket tốt)
-RUN mkdir -p /proxy && cd /proxy && \
-    npm init -y && \
-    npm install http-proxy
+# ─── 8. Cấu hình Nginx ───────────────────────────────────────
+# Nginx dùng map + location để route nhiều path
+# Khác Caddy: phải define từng upstream block riêng
+# Ưu điểm: hiệu năng cực cao, kiểm soát chi tiết header
+RUN rm -f /etc/nginx/sites-enabled/default && \
+printf '# ── Map để xử lý WebSocket upgrade đúng cách ──\n\
+# Nếu client gửi Upgrade header → set "upgrade", ngược lại → ""\n\
+# Dùng $connection_upgrade thay vì hardcode "upgrade" để HTTP thường không bị lỗi\n\
+map $http_upgrade $connection_upgrade {\n\
+    default   "";\n\
+    "websocket" "Upgrade";\n\
+}\n\
+\n\
+server {\n\
+    listen 8080;\n\
+\n\
+    # ── Terminal (ttyd phụ, bash thuần) ──\n\
+    # Dùng location /terminal/ (có trailing slash) để match đúng /terminal/ws\n\
+    # proxy_pass giữ nguyên path nhờ KHÔNG có URI sau địa chỉ upstream\n\
+    location /terminal {\n\
+        proxy_pass http://127.0.0.1:8082;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection $connection_upgrade;\n\
+        proxy_set_header Host $host;\n\
+        proxy_set_header X-Real-IP $remote_addr;\n\
+        proxy_read_timeout 86400s;\n\
+        proxy_send_timeout 86400s;\n\
+    }\n\
+\n\
+    # ── ttyd gốc (port 7681) ──\n\
+    location /ttyd {\n\
+        proxy_pass http://127.0.0.1:7681;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection $connection_upgrade;\n\
+        proxy_set_header Host $host;\n\
+        proxy_set_header X-Real-IP $remote_addr;\n\
+        proxy_read_timeout 86400s;\n\
+        proxy_send_timeout 86400s;\n\
+    }\n\
+\n\
+    # ── Tmux session ──\n\
+    location /tmux {\n\
+        proxy_pass http://127.0.0.1:8081;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection $connection_upgrade;\n\
+        proxy_set_header Host $host;\n\
+        proxy_set_header X-Real-IP $remote_addr;\n\
+        proxy_read_timeout 86400s;\n\
+        proxy_send_timeout 86400s;\n\
+    }\n\
+\n\
+    # ── OpenClaw ──\n\
+    location /openclaw {\n\
+        proxy_pass http://127.0.0.1:18789;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection "upgrade";\n\
+        proxy_set_header Host $host;\n\
+    }\n\
+\n\
+    # ── MeiAI ──\n\
+    location /meiai {\n\
+        proxy_pass http://127.0.0.1:5001;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection "upgrade";\n\
+        proxy_set_header Host $host;\n\
+    }\n\
+\n\
+    # ── Port 10000 (vừa prefix vừa mặc định) ──\n\
+    location /10000 {\n\
+        proxy_pass http://127.0.0.1:10000;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection "upgrade";\n\
+        proxy_set_header Host $host;\n\
+    }\n\
+\n\
+    # ── Các port hàng loạt 8083-8089 ──\n\
+    location /8083 { proxy_pass http://127.0.0.1:8083; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+    location /8084 { proxy_pass http://127.0.0.1:8084; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+    location /8085 { proxy_pass http://127.0.0.1:8085; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+    location /8086 { proxy_pass http://127.0.0.1:8086; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+    location /8087 { proxy_pass http://127.0.0.1:8087; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+    location /8088 { proxy_pass http://127.0.0.1:8088; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+    location /8089 { proxy_pass http://127.0.0.1:8089; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+\n\
+    # ── Port 10001-10003 ──\n\
+    location /10001 { proxy_pass http://127.0.0.1:10001; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+    location /10002 { proxy_pass http://127.0.0.1:10002; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+    location /10003 { proxy_pass http://127.0.0.1:10003; proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; }\n\
+\n\
+    # ── Mặc định: forward tới 10000 (strip prefix) ──\n\
+    location / {\n\
+        proxy_pass http://127.0.0.1:10000;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection "upgrade";\n\
+        proxy_set_header Host $host;\n\
+    }\n\
+}\n' > /etc/nginx/conf.d/clouddev.conf
 
-# Viết proxy.js hoàn chỉnh
-RUN cat > /proxy/proxy.js << 'PROXYEOF'
-/**
- * Node.js Reverse Proxy
- * Thay thế Caddy - route theo path prefix
- * Hỗ trợ HTTP + WebSocket upgrade
- */
-const http = require('http');
-const httpProxy = require('http-proxy');
-
-const proxy = httpProxy.createProxyServer({
-  ws: true,          // Bật WebSocket
-  xfwd: true,        // Thêm X-Forwarded-* headers
-});
-
-// Bảng route: path prefix → target port
-//
-// ⚠️  QUAN TRỌNG - ttyd và strip prefix:
-//     ttyd dùng -b /tmux để inject đúng prefix vào HTML (asset links, token URL, ws URL)
-//     Nên proxy KHÔNG được strip prefix → ttyd nhận /tmux/ws và tự xử lý đúng
-//     Nếu strip → ttyd nhận /ws, HTML vẫn link tới /tmux/ws → browser gọi /tmux/ws
-//     → proxy forward tới ttyd thành /ws → OK... nhưng token endpoint lại link sai
-//     Kết luận: strip: false cho mọi ttyd route
-//
-// strip: false → giữ nguyên path (ttyd tự handle nhờ -b flag)
-const routes = [
-  { prefix: '/terminal',  target: 'http://127.0.0.1:8082', strip: false },
-  { prefix: '/ttyd',      target: 'http://127.0.0.1:7681', strip: false },
-  { prefix: '/tmux',      target: 'http://127.0.0.1:8081', strip: false },
-  { prefix: '/openclaw',  target: 'http://127.0.0.1:18789',strip: false },
-  { prefix: '/meiai',     target: 'http://127.0.0.1:5001', strip: false },
-  { prefix: '/10000',     target: 'http://127.0.0.1:10000',strip: false },
-  { prefix: '/8083',      target: 'http://127.0.0.1:8083', strip: false },
-  { prefix: '/8084',      target: 'http://127.0.0.1:8084', strip: false },
-  { prefix: '/8085',      target: 'http://127.0.0.1:8085', strip: false },
-  { prefix: '/8086',      target: 'http://127.0.0.1:8086', strip: false },
-  { prefix: '/8087',      target: 'http://127.0.0.1:8087', strip: false },
-  { prefix: '/8088',      target: 'http://127.0.0.1:8088', strip: false },
-  { prefix: '/8089',      target: 'http://127.0.0.1:8089', strip: false },
-  { prefix: '/10001',     target: 'http://127.0.0.1:10001',strip: false },
-  { prefix: '/10002',     target: 'http://127.0.0.1:10002',strip: false },
-  { prefix: '/10003',     target: 'http://127.0.0.1:10003',strip: false },
-  // Catch-all: mặc định forward tới 10000
-  { prefix: '/',          target: 'http://127.0.0.1:10000',strip: false },
-];
-
-function findRoute(url) {
-  for (const route of routes) {
-    if (url.startsWith(route.prefix)) return route;
-  }
-  return { target: 'http://127.0.0.1:10000', strip: false, prefix: '/' };
-}
-
-// Rewrite URL: strip prefix nếu cần
-// /tmux/ws?arg=1  →  /ws?arg=1
-// /tmux           →  /
-function rewriteUrl(url, route) {
-  if (!route.strip) return url;
-  const stripped = url.slice(route.prefix.length) || '/';
-  // Đảm bảo luôn bắt đầu bằng /
-  return stripped.startsWith('/') ? stripped : '/' + stripped;
-}
-
-proxy.on('error', (err, req, res) => {
-  console.error(`[PROXY ERROR] ${req.url}: ${err.message}`);
-  if (res && !res.headersSent) {
-    res.writeHead(502, { 'Content-Type': 'text/plain' });
-    res.end(`Proxy error: ${err.message}`);
-  }
-});
-
-// HTTP server
-const server = http.createServer((req, res) => {
-  const route = findRoute(req.url || '/');
-  const originalUrl = req.url;
-  req.url = rewriteUrl(req.url, route);
-  console.log(`[HTTP] ${req.method} ${originalUrl} → ${route.target}${req.url}`);
-  proxy.web(req, res, { target: route.target });
-});
-
-// WebSocket upgrade — quan trọng: cũng phải rewrite URL
-server.on('upgrade', (req, socket, head) => {
-  const route = findRoute(req.url || '/');
-  const originalUrl = req.url;
-  req.url = rewriteUrl(req.url, route);
-  console.log(`[WS]   UPGRADE ${originalUrl} → ${route.target}${req.url}`);
-  proxy.ws(req, socket, head, { target: route.target });
-});
-
-server.listen(8080, '0.0.0.0', () => {
-  console.log('Node.js Proxy đang chạy tại http://0.0.0.0:8080');
-  console.log('Routes:');
-  routes.forEach(r => console.log(`  ${r.prefix.padEnd(12)} → ${r.target}`));
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => { server.close(); process.exit(0); });
-process.on('SIGINT',  () => { server.close(); process.exit(0); });
-PROXYEOF
-
-# ─── 7. Script khởi chạy ─────────────────────────────────────
+# ─── 9. Script khởi chạy ─────────────────────────────────────
 RUN printf '#!/bin/bash\n\
-echo "Đang khởi động dịch vụ Cloud Dev (Node.js Proxy)..."\n\
+echo "Đang khởi động dịch vụ Cloud Dev (Nginx)..."\n\
 \n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
+# Watchdog MeiAI\n\
 (\n\
 while true; do\n\
     pgrep -f start-meiai.sh >/dev/null || nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
@@ -226,18 +234,17 @@ while true; do\n\
 done\n\
 ) &\n\
 \n\
-# ttyd PHẢI dùng -b để inject đúng prefix vào HTML\n\
-# Proxy giữ nguyên path, ttyd tự xử lý /tmux/ws, /tmux/token, ...\n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
 sleep 1\n\
-echo "Node.js Proxy đang chạy..."\n\
-exec node /proxy/proxy.js\n\
+echo "Nginx đang chạy..."\n\
+# Nginx chạy foreground (-g "daemon off;")\n\
+exec nginx -g "daemon off;"\n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
 CMD ["/run.sh"]
 
-# Thêm route động lúc runtime: sửa /proxy/proxy.js rồi restart node
-# pm2 start /proxy/proxy.js --watch   # nếu muốn auto-reload khi sửa file
+# Reload nginx khi cần:
+# nginx -s reload
