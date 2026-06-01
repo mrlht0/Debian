@@ -106,54 +106,85 @@ exec tmux attach -t $SESSION\n\
 # ─── 5. Mem Guard ─────────────────────────────────────────────
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-# ─── 6. Cấu hình NGINX thay thế cho Caddyfile (Đã sửa lỗi 404 & Trailing Slash) ───
-RUN rm -f /etc/nginx/sites-enabled/default && \
-printf 'server {\n\
-    listen 8080 default_server;\n\
-    server_name _;\n\
+# ─── 6. Cấu hình TRAFIK thay thế cho Caddyfile ───────────────────────
+RUN mkdir -p /etc/traefik && \
+printf 'global:\n\
+  checkNewVersion: false\n\
+  sendAnonymousUsage: false\n\
 \n\
-    # Header cấu hình chung tối ưu cho kết nối thời gian thực WebSocket (ttyd)\n\
-    proxy_http_version 1.1;\n\
-    proxy_set_header Upgrade $http_upgrade;\n\
-    proxy_set_header Connection "Upgrade";\n\
-    proxy_set_header Host $host;\n\
-    proxy_set_header X-Real-IP $remote_addr;\n\
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n\
-    proxy_read_timeout 3600s;\n\
+log:\n\
+  level: INFO\n\
 \n\
-    # Sửa lỗi 404 bằng cách nhận diện cả có hoặc không có dấu gạch chéo cuối\n\
-    location ~ ^/terminal(?<suffix>.*)$ {\n\
-        proxy_pass http://127.0.0.1:8082$suffix$is_args$args;\n\
-    }\n\
+api:\n\
+  dashboard: true\n\
+  insecure: true\n\
 \n\
-    location ~ ^/ttyd(?<suffix>.*)$ {\n\
-        proxy_pass http://127.0.0.1:7681$suffix$is_args$args;\n\
-    }\n\
+entryPoints:\n\
+  web:\n\
+    address: ":8080"\n\
+  traefik_dash:\n\
+    address: ":8090"\n\
 \n\
-    location ~ ^/tmux(?<suffix>.*)$ {\n\
-        proxy_pass http://127.0.0.1:8081$suffix$is_args$args;\n\
-    }\n\
+providers:\n\
+  file:\n\
+    filename: "/etc/traefik/dynamic.yaml"\n' > /etc/traefik/traefik.yaml
+
+# Cấu hình Routing động (Dynamic) xử lý Regex sub-path không bị lỗi 404
+RUN printf 'http:\n\
+  routers:\n\
+    terminal:\n\
+      rule: "PathPrefix(`/terminal`)"\n\
+      service: "srv-terminal"\n\
+    ttyd:\n\
+      rule: "PathPrefix(`/ttyd`)"\n\
+      service: "srv-ttyd"\n\
+    tmux:\n\
+      rule: "PathPrefix(`/tmux`)"\n\
+      service: "srv-tmux"\n\
+    openclaw:\n\
+      rule: "PathPrefix(`/openclaw`)"\n\
+      service: "srv-openclaw"\n\
+    meiai:\n\
+      rule: "PathPrefix(`/meiai`)"\n\
+      service: "srv-meiai"\n\
+    # Khối xử lý cổng mặc định /10000 chuyển về port 10000 và xóa tiền tố\n\
+    default_route:\n\
+      rule: "PathPrefix(`/10000`)"\n\
+      service: "srv-default"\n\
+      middlewares:\n\
+        - "strip-10000"\n\
 \n\
-    location ~ ^/openclaw(?<suffix>.*)$ {\n\
-        proxy_pass http://127.0.0.1:18789$suffix$is_args$args;\n\
-    }\n\
+  middlewares:\n\
+    strip-10000:\n\
+      stripPrefix:\n\
+        prefixes:\n\
+          - "/10000"\n\
 \n\
-    location ~ ^/meiai(?<suffix>.*)$ {\n\
-        proxy_pass http://127.0.0.1:5001$suffix$is_args$args;\n\
-    }\n\
-\n\
-    # Xử lý dải cổng động hàng loạt (8083-8089 và 10001-10003)\n\
-    location ~ ^/(808[3-9]|1000[1-3])(?<suffix>.*)$ {\n\
-        proxy_pass http://127.0.0.1:$1$suffix$is_args$args;\n\
-    }\n\
-\n\
-    # Tuyến mặc định tương đương khối handle cuối cùng của Caddy\n\
-    location / {\n\
-        rewrite ^/10000(.*)$ $1 break;\n\
-        proxy_pass http://127.0.0.1:10000;\n\
-    }\n\
-}\n' > /etc/nginx/sites-available/clouddev && \
-ln -s /etc/nginx/sites-available/clouddev /etc/nginx/sites-enabled/
+  services:\n\
+    srv-terminal:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8082/"\n\
+    srv-ttyd:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:7681/"\n\
+    srv-tmux:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:8081/"\n\
+    srv-openclaw:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:18789/"\n\
+    srv-meiai:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:5001/"\n\
+    srv-default:\n\
+      loadBalancer:\n\
+        servers:\n\
+          - url: "http://127.0.0.1:10000/"\n' > /etc/traefik/dynamic.yaml
 
 # ─── 7. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
 RUN printf '#!/bin/bash\n\
