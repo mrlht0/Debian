@@ -15,8 +15,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --no-audit --no-fund
+COPY package.json ./
+RUN npm install --omit=dev --no-audit --no-fund
 
 COPY . .
 
