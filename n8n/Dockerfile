@@ -23,17 +23,9 @@ ENV N8N_PORT=5678 \
 # Work in /app so the runtime files stay in one predictable place.
 WORKDIR /app
 
-# We need a few tiny utilities:
-# - curl: install memcon
-# - bash: memcon installer uses bash
-# - tini: clean signal handling for the two-process setup
+# The base n8n image is hardened. It does not ship with apt-get, so we avoid
+# OS-level package installs here and keep the runtime dependent only on Node.
 USER root
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl bash tini \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install the memcon helper so the `ram` command and mem_guard exist in the container.
-RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
 # Install only the two runtime libraries we need for the public wrapper:
 # - http-proxy: forward every non-/ram request to n8n
@@ -217,24 +209,6 @@ async function buildMonitorStats() {
     stats.ramCommandOutput = ramOutput;
   }
 
-  // Linux-only diagnostics keep the endpoint useful on VPS hosts.
-  if (process.platform === 'linux') {
-    const freeOutput = safeExec('free -h');
-    if (freeOutput) stats.freeCommandOutput = freeOutput;
-
-    const topProcesses = safeExec('ps aux --sort=-%mem | head -n 6');
-    if (topProcesses) stats.topProcesses = topProcesses.split('\n');
-
-    const memGuardLogPaths = ['/tmp/mem_guard.log', '/var/log/mem_guard.log', './mem_guard.log'];
-    for (const logPath of memGuardLogPaths) {
-      const lines = readTailLines(logPath, 5);
-      if (lines.length > 0) {
-        stats.memGuardLog = { path: logPath, lines };
-        break;
-      }
-    }
-  }
-
   return { stats, rssBytes };
 }
 
@@ -367,18 +341,6 @@ function startN8n() {
   return child;
 }
 
-// Start mem_guard in the background if the installer created it.
-function startMemGuard() {
-  const memGuardPath = '/usr/local/bin/mem_guard.sh';
-  if (!fs.existsSync(memGuardPath)) return;
-
-  const child = spawn('/bin/sh', ['-lc', `nohup ${memGuardPath} >/tmp/mem_guard.log 2>&1 &`], {
-    stdio: 'ignore',
-    detached: true,
-  });
-  child.unref();
-}
-
 async function handleRamRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
   const token = url.searchParams.get('token') || req.headers['x-ram-token'];
@@ -444,10 +406,8 @@ process.on('SIGTERM', () => shutdown(0));
 process.on('SIGINT', () => shutdown(0));
 
 // Bring everything up in the right order:
-// 1) mem_guard
-// 2) n8n backend
-// 3) public proxy + /ram endpoint
-startMemGuard();
+// 1) n8n backend
+// 2) public proxy + /ram endpoint
 n8nChild = startN8n();
 server.listen(PUBLIC_PORT, '0.0.0.0', () => {
   console.log(`Public wrapper listening on 0.0.0.0:${PUBLIC_PORT}`);
@@ -463,6 +423,5 @@ USER node
 # Only one public port exists.
 EXPOSE 8080
 
-# tini forwards signals cleanly to the Node wrapper.
-ENTRYPOINT ["tini", "--"]
-CMD ["node", "/app/server.js"]
+# The wrapper starts n8n internally and exposes the single public port.
+ENTRYPOINT ["node", "/app/server.js"]
