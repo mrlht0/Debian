@@ -94,19 +94,9 @@ EOF
 
 # Import the workflow once. If the container restarts, the marker prevents duplicates.
 RUN mkdir -p /home/node/.n8n
-RUN printf '%s\n' '#!/bin/sh' \
-    'set -eu' \
-    'export N8N_PORT="${PORT:-8080}"' \
-    'export N8N_LISTEN_ADDRESS=0.0.0.0' \
-    'if [ ! -f /home/node/.n8n/.ram-workflow-imported ]; then' \
-    '  n8n import:workflow --input=/tmp/ram.workflow.json --activeState=fromJson >/tmp/ram-import.log 2>&1' \
-    '  touch /home/node/.n8n/.ram-workflow-imported' \
-    'fi' \
-    'exec n8n start' \
-    > /home/node/start-n8n.sh && chmod +x /home/node/start-n8n.sh
 
 # Only one public port exists; Render will map its PORT to this container.
 EXPOSE 8080
 
-# Run the direct n8n server. No proxy layer means no proxy-related browser warning.
-CMD ["/home/node/start-n8n.sh"]
+# Start n8n directly from the container command so Render does not depend on a wrapper file path.
+CMD ["sh", "-lc", "set -eu; export N8N_PORT=\"${PORT:-8080}\"; export N8N_LISTEN_ADDRESS=0.0.0.0; if [ ! -f /home/node/.n8n/.ram-workflow-imported ]; then n8n import:workflow --input=/tmp/ram.workflow.json --activeState=fromJson >/tmp/ram-import.log 2>&1 && touch /home/node/.n8n/.ram-workflow-imported; fi; exec n8n start"]
