@@ -1,9 +1,10 @@
 # ==============================================================
-# Cloud Dev: ttyd + tmux + HAPROXY (Thay thế Caddy)
+# Cloud Dev: ttyd + tmux + NODE.JS http-proxy (Thay thế Caddy)
 # ==============================================================
-# ⚠️  HAProxy route theo PATH thì cần ACL + use_backend
-#     Ưu điểm: cực nhanh, health-check tích hợp, stats dashboard
-#     Nhược điểm: WebSocket cần cấu hình thêm "option http-server-close"
+# ⚠️  Dùng Node.js http-proxy-middleware (đã có sẵn Node trong image)
+#     Ưu điểm: không cần cài thêm gì, logic tùy biến hoàn toàn bằng JS
+#     Phù hợp khi đã có Node.js và muốn proxy động (thêm/xóa route lúc runtime)
+#     Nhược điểm: hiệu năng thấp hơn Nginx/HAProxy với tải cao
 # ==============================================================
 
 FROM debian:bookworm-slim
@@ -15,7 +16,6 @@ RUN apt update && apt install -y \
     bash curl wget git nano \
     procps htop tmux \
     ca-certificates \
-    haproxy \
     tar net-tools \
     && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
     && apt-get install -y nodejs \
@@ -107,141 +107,109 @@ exec tmux attach -t $SESSION\n\
 
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-# ─── 6. Cấu hình HAProxy ─────────────────────────────────────
-# HAProxy dùng ACL (Access Control List) để match path
-# Khác Caddy/Nginx: cần khai báo frontend + backend tách biệt
-# Stats dashboard tại /haproxy-stats (port 8080)
-RUN printf 'global\n\
-    log stdout format raw local0\n\
-    maxconn 4096\n\
-    daemon\n\
-\n\
-defaults\n\
-    log     global\n\
-    mode    http\n\
-    option  httplog\n\
-    option  forwardfor\n\
-    # Bắt buộc để WebSocket hoạt động đúng\n\
-    option  http-server-close\n\
-    timeout connect 5s\n\
-    timeout client  86400s\n\
-    timeout tunnel  86400s\n\
-    timeout server  86400s\n\
-\n\
-# ── Stats dashboard tích hợp của HAProxy ──\n\
-listen stats\n\
-    bind *:8090\n\
-    stats enable\n\
-    stats uri /\n\
-    stats refresh 10s\n\
-    stats admin if TRUE\n\
-\n\
-frontend http_front\n\
-    bind *:8080\n\
-\n\
-    # ── Khai báo ACL match theo path prefix ──\n\
-    acl path_terminal  path_beg /terminal\n\
-    acl path_ttyd      path_beg /ttyd\n\
-    acl path_tmux      path_beg /tmux\n\
-    acl path_openclaw  path_beg /openclaw\n\
-    acl path_meiai     path_beg /meiai\n\
-    acl path_10000     path_beg /10000\n\
-    acl path_8083      path_beg /8083\n\
-    acl path_8084      path_beg /8084\n\
-    acl path_8085      path_beg /8085\n\
-    acl path_8086      path_beg /8086\n\
-    acl path_8087      path_beg /8087\n\
-    acl path_8088      path_beg /8088\n\
-    acl path_8089      path_beg /8089\n\
-    acl path_10001     path_beg /10001\n\
-    acl path_10002     path_beg /10002\n\
-    acl path_10003     path_beg /10003\n\
-\n\
-    # ── Upgrade WebSocket ──\n\
-    acl is_websocket hdr(Upgrade) -i websocket\n\
-\n\
-    # ── Route đến backend tương ứng ──\n\
-    # ── Strip prefix cho các service dùng ttyd (chúng expect path = /)\n\
-    # HAProxy dùng regex: ^/PREFIX(/.*)? → \\1 (hoặc / nếu không có phần sau)\n\
-    http-request replace-path ^/terminal(/.*)?$  \\1         if path_terminal\n\
-    http-request replace-path ^/ttyd(/.*)?$      \\1         if path_ttyd\n\
-    http-request replace-path ^/tmux(/.*)?$      \\1         if path_tmux\n\
-    http-request replace-path ^/openclaw(/.*)?$  \\1         if path_openclaw\n\
-    # meiai và các port số: giữ nguyên path (upstream tự xử lý)\n\
-\n\
-    # ── Route đến backend tương ứng ──\n\
-    use_backend backend_terminal  if path_terminal\n\
-    use_backend backend_ttyd      if path_ttyd\n\
-    use_backend backend_tmux      if path_tmux\n\
-    use_backend backend_openclaw  if path_openclaw\n\
-    use_backend backend_meiai     if path_meiai\n\
-    use_backend backend_10000     if path_10000\n\
-    use_backend backend_8083      if path_8083\n\
-    use_backend backend_8084      if path_8084\n\
-    use_backend backend_8085      if path_8085\n\
-    use_backend backend_8086      if path_8086\n\
-    use_backend backend_8087      if path_8087\n\
-    use_backend backend_8088      if path_8088\n\
-    use_backend backend_8089      if path_8089\n\
-    use_backend backend_10001     if path_10001\n\
-    use_backend backend_10002     if path_10002\n\
-    use_backend backend_10003     if path_10003\n\
-    # Mặc định: forward tới 10000\n\
-    default_backend backend_10000\n\
-\n\
-# ── Backend definitions ──\n\
-backend backend_terminal\n\
-    server s1 127.0.0.1:8082 check\n\
-\n\
-backend backend_ttyd\n\
-    server s1 127.0.0.1:7681 check\n\
-\n\
-backend backend_tmux\n\
-    server s1 127.0.0.1:8081 check\n\
-\n\
-backend backend_openclaw\n\
-    server s1 127.0.0.1:18789 check\n\
-\n\
-backend backend_meiai\n\
-    server s1 127.0.0.1:5001 check\n\
-\n\
-backend backend_10000\n\
-    server s1 127.0.0.1:10000 check\n\
-\n\
-backend backend_8083\n\
-    server s1 127.0.0.1:8083 check\n\
-\n\
-backend backend_8084\n\
-    server s1 127.0.0.1:8084 check\n\
-\n\
-backend backend_8085\n\
-    server s1 127.0.0.1:8085 check\n\
-\n\
-backend backend_8086\n\
-    server s1 127.0.0.1:8086 check\n\
-\n\
-backend backend_8087\n\
-    server s1 127.0.0.1:8087 check\n\
-\n\
-backend backend_8088\n\
-    server s1 127.0.0.1:8088 check\n\
-\n\
-backend backend_8089\n\
-    server s1 127.0.0.1:8089 check\n\
-\n\
-backend backend_10001\n\
-    server s1 127.0.0.1:10001 check\n\
-\n\
-backend backend_10002\n\
-    server s1 127.0.0.1:10002 check\n\
-\n\
-backend backend_10003\n\
-    server s1 127.0.0.1:10003 check\n\
-' > /etc/haproxy/haproxy.cfg
+# ─── 6. Tạo Node.js proxy server ─────────────────────────────
+# Cài http-proxy (nhẹ, hỗ trợ WebSocket tốt)
+RUN mkdir -p /proxy && cd /proxy && \
+    npm init -y && \
+    npm install http-proxy
+
+# Viết proxy.js hoàn chỉnh
+RUN cat > /proxy/proxy.js << 'PROXYEOF'
+/**
+ * Node.js Reverse Proxy
+ * Thay thế Caddy - route theo path prefix
+ * Hỗ trợ HTTP + WebSocket upgrade
+ */
+const http = require('http');
+const httpProxy = require('http-proxy');
+
+const proxy = httpProxy.createProxyServer({
+  ws: true,          // Bật WebSocket
+  xfwd: true,        // Thêm X-Forwarded-* headers
+});
+
+// Bảng route: path prefix → target port
+// strip: true  → xóa prefix trước khi forward đến upstream
+//               VD: /tmux/ws → /ws  (ttyd cần nhận / chứ không phải /tmux/)
+// strip: false → giữ nguyên path (upstream tự handle prefix)
+const routes = [
+  { prefix: '/terminal',  target: 'http://127.0.0.1:8082', strip: true  },
+  { prefix: '/ttyd',      target: 'http://127.0.0.1:7681', strip: true  },
+  { prefix: '/tmux',      target: 'http://127.0.0.1:8081', strip: true  },
+  { prefix: '/openclaw',  target: 'http://127.0.0.1:18789',strip: true  },
+  { prefix: '/meiai',     target: 'http://127.0.0.1:5001', strip: false },
+  { prefix: '/10000',     target: 'http://127.0.0.1:10000',strip: false },
+  { prefix: '/8083',      target: 'http://127.0.0.1:8083', strip: false },
+  { prefix: '/8084',      target: 'http://127.0.0.1:8084', strip: false },
+  { prefix: '/8085',      target: 'http://127.0.0.1:8085', strip: false },
+  { prefix: '/8086',      target: 'http://127.0.0.1:8086', strip: false },
+  { prefix: '/8087',      target: 'http://127.0.0.1:8087', strip: false },
+  { prefix: '/8088',      target: 'http://127.0.0.1:8088', strip: false },
+  { prefix: '/8089',      target: 'http://127.0.0.1:8089', strip: false },
+  { prefix: '/10001',     target: 'http://127.0.0.1:10001',strip: false },
+  { prefix: '/10002',     target: 'http://127.0.0.1:10002',strip: false },
+  { prefix: '/10003',     target: 'http://127.0.0.1:10003',strip: false },
+  // Catch-all: mặc định forward tới 10000
+  { prefix: '/',          target: 'http://127.0.0.1:10000',strip: false },
+];
+
+function findRoute(url) {
+  for (const route of routes) {
+    if (url.startsWith(route.prefix)) return route;
+  }
+  return { target: 'http://127.0.0.1:10000', strip: false, prefix: '/' };
+}
+
+// Rewrite URL: strip prefix nếu cần
+// /tmux/ws?arg=1  →  /ws?arg=1
+// /tmux           →  /
+function rewriteUrl(url, route) {
+  if (!route.strip) return url;
+  const stripped = url.slice(route.prefix.length) || '/';
+  // Đảm bảo luôn bắt đầu bằng /
+  return stripped.startsWith('/') ? stripped : '/' + stripped;
+}
+
+proxy.on('error', (err, req, res) => {
+  console.error(`[PROXY ERROR] ${req.url}: ${err.message}`);
+  if (res && !res.headersSent) {
+    res.writeHead(502, { 'Content-Type': 'text/plain' });
+    res.end(`Proxy error: ${err.message}`);
+  }
+});
+
+// HTTP server
+const server = http.createServer((req, res) => {
+  const route = findRoute(req.url || '/');
+  const originalUrl = req.url;
+  req.url = rewriteUrl(req.url, route);
+  console.log(`[HTTP] ${req.method} ${originalUrl} → ${route.target}${req.url}`);
+  proxy.web(req, res, { target: route.target });
+});
+
+// WebSocket upgrade — quan trọng: cũng phải rewrite URL
+server.on('upgrade', (req, socket, head) => {
+  const route = findRoute(req.url || '/');
+  const originalUrl = req.url;
+  req.url = rewriteUrl(req.url, route);
+  console.log(`[WS]   UPGRADE ${originalUrl} → ${route.target}${req.url}`);
+  proxy.ws(req, socket, head, { target: route.target });
+});
+
+server.listen(8080, '0.0.0.0', () => {
+  console.log('Node.js Proxy đang chạy tại http://0.0.0.0:8080');
+  console.log('Routes:');
+  routes.forEach(r => console.log(`  ${r.prefix.padEnd(12)} → ${r.target}`));
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => { server.close(); process.exit(0); });
+process.on('SIGINT',  () => { server.close(); process.exit(0); });
+PROXYEOF
 
 # ─── 7. Script khởi chạy ─────────────────────────────────────
 RUN printf '#!/bin/bash\n\
-echo "Đang khởi động dịch vụ Cloud Dev (HAProxy)..."\n\
+echo "Đang khởi động dịch vụ Cloud Dev (Node.js Proxy)..."\n\
 \n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
@@ -252,19 +220,18 @@ while true; do\n\
 done\n\
 ) &\n\
 \n\
-# Không cần -b vì HAProxy đã strip prefix\n\
+# Không cần -b vì proxy.js đã strip prefix trước khi forward\n\
 ttyd -p 8081 -W /start.sh &\n\
 ttyd -p 8082 -W bash &\n\
 \n\
 sleep 1\n\
-echo "HAProxy đang chạy... Stats dashboard: http://host:8090"\n\
-# HAProxy cần file PID và chạy foreground với -db\n\
-exec haproxy -f /etc/haproxy/haproxy.cfg -db\n\
+echo "Node.js Proxy đang chạy..."\n\
+# Node.js proxy chạy foreground\n\
+exec node /proxy/proxy.js\n\
 ' > /run.sh && chmod +x /run.sh
 
-EXPOSE 8080 8090
+EXPOSE 8080
 CMD ["/run.sh"]
 
-# Reload HAProxy không restart:
-# haproxy -f /etc/haproxy/haproxy.cfg -sf $(cat /var/run/haproxy.pid)
-# Xem stats: curl http://localhost:8090/
+# Thêm route động lúc runtime: sửa /proxy/proxy.js rồi restart node
+# pm2 start /proxy/proxy.js --watch   # nếu muốn auto-reload khi sửa file
