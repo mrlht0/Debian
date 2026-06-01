@@ -186,9 +186,14 @@ RUN printf 'http:\n\
         servers:\n\
           - url: "http://127.0.0.1:10000/"\n' > /etc/traefik/dynamic.yaml
 
-# ─── 7. Script khởi chạy toàn bộ dịch vụ ─────────────────────────────
+# ─── 7. Script khởi chạy toàn bộ dịch vụ mạng ─────────────────────────
 RUN printf '#!/bin/bash\n\
-echo "Đang khởi động dịch vụ Cloud Dev với Nginx..."\n\
+echo "Đang dọn dẹp các cổng mạng cũ nếu có..."\n\
+fuser -k 8080/tcp 2>/dev/null\n\
+fuser -k 8090/tcp 2>/dev/null\n\
+pkill -f traefik 2>/dev/null\n\
+\n\
+echo "Đang khởi động dịch vụ Cloud Dev với Traefik..."\n\
 \n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
@@ -203,10 +208,10 @@ done\n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
 \n\
-sleep 1\n\
+sleep 2\n\
 \n\
-echo "Nginx đang chạy..."\n\
-exec nginx -g "daemon off;"\n\
+echo "Traefik đang khởi động..."\n\
+exec traefik --configfile=/etc/traefik/traefik.yaml\n\
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
