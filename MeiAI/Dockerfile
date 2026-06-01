@@ -106,47 +106,48 @@ exec tmux attach -t $SESSION\n\
 # ─── 5. Mem Guard ─────────────────────────────────────────────
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-# ─── 6. Cấu hình NGINX thay cho Caddyfile ───────────────────────
+# ─── 6. Cấu hình NGINX thay thế cho Caddyfile (Đã sửa lỗi 404 & Trailing Slash) ───
 RUN rm -f /etc/nginx/sites-enabled/default && \
 printf 'server {\n\
     listen 8080 default_server;\n\
     server_name _;\n\
 \n\
-    # Cấu hình chung cho WebSocket proxy công việc của ttyd\n\
+    # Header cấu hình chung tối ưu cho kết nối thời gian thực WebSocket (ttyd)\n\
     proxy_http_version 1.1;\n\
     proxy_set_header Upgrade $http_upgrade;\n\
     proxy_set_header Connection "Upgrade";\n\
     proxy_set_header Host $host;\n\
     proxy_set_header X-Real-IP $remote_addr;\n\
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n\
+    proxy_read_timeout 3600s;\n\
 \n\
-    location /terminal/ {\n\
-        proxy_pass http://127.0.0.1:8082/;\n\
+    # Sửa lỗi 404 bằng cách nhận diện cả có hoặc không có dấu gạch chéo cuối\n\
+    location ~ ^/terminal(?<suffix>.*)$ {\n\
+        proxy_pass http://127.0.0.1:8082$suffix$is_args$args;\n\
     }\n\
 \n\
-    location /ttyd/ {\n\
-        proxy_pass http://127.0.0.1:7681/;\n\
+    location ~ ^/ttyd(?<suffix>.*)$ {\n\
+        proxy_pass http://127.0.0.1:7681$suffix$is_args$args;\n\
     }\n\
 \n\
-    location /tmux/ {\n\
-        proxy_pass http://127.0.0.1:8081/;\n\
+    location ~ ^/tmux(?<suffix>.*)$ {\n\
+        proxy_pass http://127.0.0.1:8081$suffix$is_args$args;\n\
     }\n\
 \n\
-    location /openclaw/ {\n\
-        proxy_pass http://127.0.0.1:18789/;\n\
+    location ~ ^/openclaw(?<suffix>.*)$ {\n\
+        proxy_pass http://127.0.0.1:18789$suffix$is_args$args;\n\
     }\n\
 \n\
-    location /meiai/ {\n\
-        proxy_pass http://127.0.0.1:5001/;\n\
+    location ~ ^/meiai(?<suffix>.*)$ {\n\
+        proxy_pass http://127.0.0.1:5001$suffix$is_args$args;\n\
     }\n\
 \n\
-    # Proxy động hàng loạt bằng Regex tương đương Snippet của Caddy\n\
-    # Bắt các request dạng /8083/, /10001/, v.v...\n\
-    location ~ ^/(808[3-9]|1000[1-3])/ {\n\
-        proxy_pass http://127.0.0.1:$1;\n\
+    # Xử lý dải cổng động hàng loạt (8083-8089 và 10001-10003)\n\
+    location ~ ^/(808[3-9]|1000[1-3])(?<suffix>.*)$ {\n\
+        proxy_pass http://127.0.0.1:$1$suffix$is_args$args;\n\
     }\n\
 \n\
-    # Router mặc định giống handle cuối của Caddy (Xóa prefix /10000 và đẩy vào port 10000)\n\
+    # Tuyến mặc định tương đương khối handle cuối cùng của Caddy\n\
     location / {\n\
         rewrite ^/10000(.*)$ $1 break;\n\
         proxy_pass http://127.0.0.1:10000;\n\
