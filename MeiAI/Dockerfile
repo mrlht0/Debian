@@ -1,5 +1,5 @@
 # ==============================================================
-# Cloud Dev: ttyd + tmux + Node.js Proxy (Full Fixed Multi-Route)
+# Cloud Dev: ttyd + tmux + Node.js Proxy (Fixed 404 Final)
 # ==============================================================
 
 FROM debian:bookworm-slim
@@ -28,7 +28,6 @@ RUN apt-get update && apt-get install -y git openssh-client
 RUN mkdir -p -m 0700 /root/.ssh && \
     ssh-keyscan github.com >> /root/.ssh/known_hosts
 
-# Ghi khóa bí mật vào id_ed25519 để clone Repo tư nhân công khai
 RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
     echo "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW" >> /root/.ssh/id_ed25519 && \
     echo "QyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+QAAAJCe7Zalnu2W" >> /root/.ssh/id_ed25519 && \
@@ -109,7 +108,7 @@ exec tmux attach -t $SESSION\n\
 # ─── 5. Thêm công cụ mem_guard (Giới hạn và quản trị RAM tối ưu) ───
 RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
 
-# ─── 6. Cấu hình NODE.JS PROXY THAY THẾ CADDY (Sửa triệt để 404 & WebSocket) ───
+# ─── 6. Cấu hình NODE.JS SMART PROXY (Khắc phục triệt để lỗi 404 Trailing Slash) ───
 WORKDIR /app-proxy
 RUN npm init -y && npm install http-proxy
 
@@ -117,7 +116,6 @@ RUN printf 'const http = require("http");\n\
 const HttpProxy = require("http-proxy");\n\
 \n\
 const proxy = HttpProxy.createProxyServer({\n\
-    target: "http://127.0.0.1:10000",\n\
     ws: true,\n\
     changeOrigin: true\n\
 });\n\
@@ -127,49 +125,67 @@ const routes = {\n\
     "/ttyd": 7681,\n\
     "/tmux": 8081,\n\
     "/openclaw": 18789,\n\
-    "/meiai": 5001,\n\
-    "/10000": 10000\n\
+    "/meiai": 5001\n\
 };\n\
 \n\
-function getTargetPort(url) {\n\
+function handleProxy(req, res, isWs = false, socket = null, head = null) {\n\
+    let url = req.url;\n\
+    \n\
+    // Tự động chuẩn hóa: Nếu người dùng truy cập /terminal đổi thành /terminal/\n\
     for (const prefix in routes) {\n\
-        if (url.startsWith(prefix + "/") || url === prefix) {\n\
-            return { port: routes[prefix], prefix: prefix };\n\
+        if (url === prefix) {\n\
+            if (!isWs) {\n\
+                res.writeHead(301, { "Location": prefix + "/" });\n\
+                res.end();\n\
+                return;\n\
+            }\n\
+            url = prefix + "/";\n\
+        }\n\
+        \n\
+        if (url.startsWith(prefix + "/")) {\n\
+            const target = `http://127.0.0.1:${routes[prefix]}`;\n\
+            if (isWs) {\n\
+                proxy.ws(req, socket, head, { target });\n\
+            } else {\n\
+                proxy.web(req, res, { target });\n\
+            }\n\
+            return;\n\
         }\n\
     }\n\
+\n\
+    // Kiểm tra dải cổng động: /8083 đến /8089 và /10001 đến /10003\n\
     const dynamicMatch = url.match(/^\\/((?:808[3-9])|(?:1000[1-3]))(?:\\/|$)/);\n\
     if (dynamicMatch) {\n\
-        const port = parseInt(dynamicMatch[1]);\n\
-        return { port: port, prefix: "/" + port };\n\
+        const port = dynamicMatch[1];\n\
+        const target = `http://127.0.0.1:${port}`;\n\
+        if (isWs) {\n\
+            proxy.ws(req, socket, head, { target });\n\
+        } else {\n\
+            proxy.web(req, res, { target });\n\
+        }\n\
+        return;\n\
     }\n\
-    return null;\n\
-}\n\
+\n\
+    // Tuyến mặc định: Xóa tiền tố /10000 nếu có và chuyển tới cổng 10000\n\
+    if (url.startsWith("/10000/")) {\n\
+        req.url = url.substring(6);\n\
+    } else if (url === "/10000") {\n\
+        req.url = "/";\n\
+    }\n\
+    \n\
+    const defaultTarget = "http://127.0.0.1:10000";\n\
+    if (isWs) {\n\
+        proxy.ws(req, socket, head, { target: defaultTarget });\n\
+    } else {\n\
+        proxy.web(req, res, { target: defaultTarget });\n\
+    }\n}\n\
 \n\
 const server = http.createServer((req, res) => {\n\
-    const targetInfo = getTargetPort(req.url);\n\
-    if (targetInfo) {\n\
-        if (targetInfo.prefix === "/10000") {\n\
-            req.url = req.url.substring(6) || "/";\n\
-        }\n\
-        proxy.web(req, res, { target: `http://127.0.0.1:${targetInfo.port}` });\n\
-    } else {\n\
-        if (req.url.startsWith("/10000")) {\n\
-            req.url = req.url.substring(6) || "/";\n\
-        }\n\
-        proxy.web(req, res, { target: "http://127.0.0.1:10000" });\n\
-    }\n\
+    handleProxy(req, res, false);\n\
 });\n\
 \n\
 server.on("upgrade", (req, socket, head) => {\n\
-    const targetInfo = getTargetPort(req.url);\n\
-    if (targetInfo) {\n\
-        if (targetInfo.prefix === "/10000") {\n\
-            req.url = req.url.substring(6) || "/";\n\
-        }\n\
-        proxy.ws(req, socket, head, { target: `http://127.0.0.1:${targetInfo.port}` });\n\
-    } else {\n\
-        proxy.ws(req, socket, head, { target: "http://127.0.0.1:10000" });\n\
-    }\n\
+    handleProxy(req, null, true, socket, head);\n\
 });\n\
 \n\
 proxy.on("error", (err, req, res) => {\n\
@@ -180,7 +196,7 @@ proxy.on("error", (err, req, res) => {\n\
 });\n\
 \n\
 server.listen(8080, "0.0.0.0", () => {\n\
-    console.log("🚀 Node.js Smart Proxy đang chạy tại port 8080");\n\
+    console.log("🚀 Node.js Smart Proxy đã khắc phục lỗi 404 đang chạy tại port 8080");\n\
 });\n' > proxy.js
 
 # ─── 7. Script khởi chạy toàn bộ dịch vụ mạng hệ thống ─────────────────
