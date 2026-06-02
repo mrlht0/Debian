@@ -29,6 +29,6 @@ WORKDIR /home/node
 # Only one public port exists; Render will map its PORT to this container.
 EXPOSE 8080
 
-# Run n8n directly via its installed binary path so Render does not depend on PATH.
-# The RAM/cost endpoint is defined inside n8n as a workflow built from Webhook + Code + Respond to Webhook nodes.
-CMD ["/usr/local/lib/node_modules/n8n/bin/n8n", "start"]
+# The official image entrypoint already invokes the n8n binary.
+# Pass only the subcommand here so we do not double-prefix the command name.
+CMD ["start"]
