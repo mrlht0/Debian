@@ -11,7 +11,6 @@ ENV N8N_PORT=5678 \
     EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
     EXECUTIONS_DATA_SAVE_ON_ERROR=none \
     EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
-    MONGODB_URI=mongodb+srv://tylauj04:t482169@cluster0.ygab0.mongodb.net \
     NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
 
 WORKDIR /app
@@ -23,350 +22,532 @@ RUN npm init -y >/dev/null 2>&1 \
 RUN cat <<'EOF' > /app/server.js
 'use strict';
 
-const fs   = require('node:fs');
+const fs = require('node:fs');
 const http = require('node:http');
-const net  = require('node:net');
-const os   = require('node:os');
+const net = require('node:net');
+const os = require('node:os');
 const path = require('node:path');
 const { execSync, spawn } = require('node:child_process');
 const httpProxy = require('http-proxy');
 
-const PUBLIC_PORT        = Number(process.env.PORT || 8080);
-const INTERNAL_N8N_PORT  = Number(process.env.N8N_PORT || 5678);
+const PUBLIC_PORT = Number(process.env.PORT || 8080);
+const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
 
-// Để trống = /ram public; set = yêu cầu ?token=... hoặc x-ram-token header
-const RAM_TOKEN   = process.env.RAM_TOKEN || '';
+const RAM_TOKEN = process.env.RAM_TOKEN || '';
 const MONGODB_URI = process.env.MONGODB_URI || '';
-const TARGET_DB   = 'application-manager';
+const TARGET_DB = process.env.TARGET_DB || 'application-manager';
 
-// ─── Mongoose lazy-load ───────────────────────────────────────────────────────
-let mongoose   = null;
+let mongoose = null;
 let CostHistory = null;
+
+function getProjectName() {
+  try {
+    const pkgFile = path.join(process.cwd(), 'package.json');
+    const pkg = fs.existsSync(pkgFile)
+      ? JSON.parse(fs.readFileSync(pkgFile, 'utf8'))
+      : {};
+
+    return (
+      process.env.PROJECT_NAME ||
+      pkg.name ||
+      process.env.RENDER_SERVICE_NAME ||
+      process.env.RENDER_SERVICE_ID ||
+      process.env.HOSTNAME ||
+      os.hostname() ||
+      'unknown'
+    );
+  } catch {
+    return (
+      process.env.PROJECT_NAME ||
+      process.env.RENDER_SERVICE_NAME ||
+      process.env.RENDER_SERVICE_ID ||
+      process.env.HOSTNAME ||
+      os.hostname() ||
+      'unknown'
+    );
+  }
+}
 
 function loadMongoose() {
   if (mongoose) return mongoose;
+
   mongoose = require('mongoose');
+
   const schema = new mongoose.Schema({
-    month:                    { type: String, required: true, unique: true },
+    month: { type: String, required: true },
+    projectName: { type: String, required: true, default: 'unknown' },
+
     accumulatedMemoryMinutes: { type: Number, default: 0 },
-    accumulatedCpuMinutes:    { type: Number, default: 0 },
-    accumulatedEgressBytes:   { type: Number, default: 0 },
-    lastTxBytes:              { type: Number, default: 0 },
-    lastMeasurementTime:      { type: Date,   default: Date.now },
-    memoryCost:               { type: Number, default: 0 },
-    cpuCost:                  { type: Number, default: 0 },
-    egressCost:               { type: Number, default: 0 },
-    totalCost:                { type: Number, default: 0 },
+    accumulatedCpuMinutes: { type: Number, default: 0 },
+    accumulatedEgressBytes: { type: Number, default: 0 },
+    lastTxBytes: { type: Number, default: 0 },
+    lastMeasurementTime: { type: Date, default: Date.now },
+
+    memoryCost: { type: Number, default: 0 },
+    cpuCost: { type: Number, default: 0 },
+    egressCost: { type: Number, default: 0 },
+    totalCost: { type: Number, default: 0 },
   }, { timestamps: true });
-  CostHistory = mongoose.models.CostHistory || mongoose.model('CostHistory', schema);
+
+  schema.index({ month: 1, projectName: 1 }, { unique: true });
+
+  CostHistory =
+    mongoose.models.CostHistory ||
+    mongoose.model('CostHistory', schema);
+
   return mongoose;
 }
 
 async function connectToMongo() {
   if (!MONGODB_URI) return false;
+
   const lib = loadMongoose();
+
   if (lib.connection.readyState >= 1) return true;
+
   let uri = MONGODB_URI;
-  try { const u = new URL(MONGODB_URI); u.pathname = `/${TARGET_DB}`; uri = u.toString(); }
-  catch { const [base, qs] = MONGODB_URI.split('?'); uri = `${base.replace(/\/+$/, '')}/${TARGET_DB}?${qs || 'retryWrites=true&w=majority'}`; }
+
+  try {
+    const u = new URL(MONGODB_URI);
+    u.pathname = `/${TARGET_DB}`;
+    uri = u.toString();
+  } catch {
+    const [base, qs] = MONGODB_URI.split('?');
+    uri = `${base.replace(/\/+$/, '')}/${TARGET_DB}?${qs || 'retryWrites=true&w=majority'}`;
+  }
+
   await lib.connect(uri);
   return true;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+async function migrateCostHistoryIndexes() {
+  if (!mongoose?.connection?.db) return;
+
+  try {
+    const collection = mongoose.connection.db.collection('costhistories');
+    const indexes = await collection.indexes();
+
+    const hasOldMonthIndex = indexes.some((idx) => idx.name === 'month_1');
+
+    if (hasOldMonthIndex) {
+      console.log('[RAM API] Dropping obsolete unique index month_1...');
+      await collection.dropIndex('month_1');
+      console.log('[RAM API] Dropped obsolete unique index month_1');
+    }
+  } catch (err) {
+    console.warn('[RAM API] Failed to check/drop old index:', err.message);
+  }
+}
+
 const toMB = (b) => (b / 1024 / 1024).toFixed(2);
 const toGB = (b) => (b / 1024 / 1024 / 1024).toFixed(2);
 
 function safeExec(cmd) {
-  try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim(); }
-  catch { return ''; }
+  try {
+    return execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+  } catch {
+    return '';
+  }
 }
 
-// ─── CPU measurement ──────────────────────────────────────────────────────────
 async function measureCpuPercent() {
-  const startCpu   = os.cpus();
+  const startCpu = os.cpus();
   const startUsage = process.cpuUsage();
-  const hrStart    = process.hrtime();
-  await new Promise((r) => setTimeout(r, 100));
-  const endCpu   = os.cpus();
-  const endUsage = process.cpuUsage(startUsage);
-  const hrEnd    = process.hrtime();
+  const hrStart = process.hrtime();
 
-  const elapTimeMS = (hrEnd[0] * 1e9 + hrEnd[1] - (hrStart[0] * 1e9 + hrStart[1])) / 1e6;
+  await new Promise((r) => setTimeout(r, 100));
+
+  const endCpu = os.cpus();
+  const endUsage = process.cpuUsage(startUsage);
+  const hrEnd = process.hrtime();
+
+  const elapTimeMS =
+    (hrEnd[0] * 1e9 + hrEnd[1] - (hrStart[0] * 1e9 + hrStart[1])) / 1e6;
+
   const elapUserMS = endUsage.user / 1000;
   const elapSystMS = endUsage.system / 1000;
+
   const cpuPercentNode = elapTimeMS > 0
     ? (((elapUserMS + elapSystMS) / elapTimeMS) * 100).toFixed(2)
     : '0.00';
 
-  let totalDiff = 0, idleDiff = 0;
+  let totalDiff = 0;
+  let idleDiff = 0;
+
   for (let i = 0; i < startCpu.length; i++) {
-    const s = startCpu[i].times, e = endCpu[i].times;
-    totalDiff += (e.user + e.nice + e.sys + e.idle + e.irq) - (s.user + s.nice + s.sys + s.idle + s.irq);
-    idleDiff  += e.idle - s.idle;
+    const s = startCpu[i].times;
+    const e = endCpu[i].times;
+
+    totalDiff +=
+      (e.user + e.nice + e.sys + e.idle + e.irq) -
+      (s.user + s.nice + s.sys + s.idle + s.irq);
+
+    idleDiff += e.idle - s.idle;
   }
-  const cpuPercentSystem = totalDiff > 0 ? ((1 - idleDiff / totalDiff) * 100).toFixed(2) : '0.00';
+
+  const cpuPercentSystem = totalDiff > 0
+    ? ((1 - idleDiff / totalDiff) * 100).toFixed(2)
+    : '0.00';
 
   return {
     nodeProcess: `${cpuPercentNode}%`,
     systemTotal: `${cpuPercentSystem}%`,
-    coresCount:  startCpu.length,
+    coresCount: startCpu.length,
     loadAverage: os.loadavg().map((v) => v.toFixed(2)),
   };
 }
 
-// ─── Monitor stats + diagnostics + identity ───────────────────────────────────
 async function buildMonitorStats() {
   const totalMem = os.totalmem();
-  const freeMem  = os.freemem();
-  const usedMem  = totalMem - freeMem;
-  const cpu      = await measureCpuPercent();
-  const mem      = process.memoryUsage();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const cpu = await measureCpuPercent();
+  const mem = process.memoryUsage();
+
+  const projectName = getProjectName();
 
   const stats = {
     cpu,
     os: {
-      total:          `${toGB(totalMem)} GB`,
-      free:           `${toGB(freeMem)} GB`,
-      used:           `${toGB(usedMem)} GB`,
+      total: `${toGB(totalMem)} GB`,
+      free: `${toGB(freeMem)} GB`,
+      used: `${toGB(usedMem)} GB`,
       usedPercentage: `${((usedMem / totalMem) * 100).toFixed(2)}%`,
     },
     node: {
       heapTotal: `${toMB(mem.heapTotal)} MB`,
-      heapUsed:  `${toMB(mem.heapUsed)} MB`,
-      rss:       `${toMB(mem.rss)} MB`,
+      heapUsed: `${toMB(mem.heapUsed)} MB`,
+      rss: `${toMB(mem.rss)} MB`,
     },
     timestamp: new Date().toISOString(),
   };
 
-  // C. Linux diagnostics (free -h, top processes, mem_guard log)
   if (process.platform === 'linux') {
-    try {
-      stats.freeCommandOutput = safeExec('free -h');
-      const ps = safeExec('ps aux --sort=-%mem | head -n 6');
-      if (ps) stats.topProcesses = ps.split('\n');
-    } catch (e) { stats.diagnosticError = String(e); }
+    stats.freeCommandOutput = safeExec('free -h');
+
+    const ps = safeExec('ps aux --sort=-%mem | head -n 6');
+    if (ps) stats.topProcesses = ps.split('\n');
 
     for (const p of ['/tmp/mem_guard.log', '/var/log/mem_guard.log', './mem_guard.log']) {
       const tail = safeExec(`tail -n 5 ${p} 2>/dev/null`);
-      if (tail) { stats.memGuardLog = { path: p, lines: tail.split('\n') }; break; }
+      if (tail) {
+        stats.memGuardLog = {
+          path: p,
+          lines: tail.split('\n'),
+        };
+        break;
+      }
     }
   }
 
-  // E. Machine & project identity
-  try {
-    const pkgFile = path.join(process.cwd(), 'package.json');
-    const pkg     = fs.existsSync(pkgFile) ? JSON.parse(fs.readFileSync(pkgFile, 'utf8')) : {};
-    stats.identity = {
-      name:     pkg.name    || 'unknown',
-      version:  pkg.version || '1.0.0',
-      hostname: os.hostname(),
-      platform: os.platform(),
-      arch:     os.arch(),
-      ips: Object.values(os.networkInterfaces()).flat()
-             .filter((i) => i && !i.internal && i.family === 'IPv4')
-             .map((i) => i.address),
-    };
-  } catch (e) { stats.identity = { error: String(e), hostname: os.hostname() }; }
+  stats.identity = {
+    name: projectName,
+    version: '1.0.0',
+    hostname: os.hostname(),
+    platform: os.platform(),
+    arch: os.arch(),
+    ips: Object.values(os.networkInterfaces())
+      .flat()
+      .filter((i) => i && !i.internal && i.family === 'IPv4')
+      .map((i) => i.address),
+  };
 
-  return { stats, rssBytes: mem.rss };
+  return {
+    stats,
+    rssBytes: mem.rss,
+  };
 }
 
-// ─── Cost history (D. Project cost x2 rates) ──────────────────────────────────
 async function updateCostHistory(rssBytes) {
-  if (!MONGODB_URI) return { currentMonth: null, last5MonthsHistory: [], disabled: true };
+  if (!MONGODB_URI) {
+    return {
+      currentMonth: null,
+      last5MonthsHistory: [],
+      disabled: true,
+    };
+  }
 
   try {
     await connectToMongo();
+    await migrateCostHistoryIndexes();
 
-    const now             = new Date();
-    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const now = new Date();
+    const currentMonthStr =
+      `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-    // Network egress delta
+    const projectName = getProjectName();
+
     let currentTxBytes = 0;
+
     if (process.platform === 'linux') {
       try {
         const txPath = '/sys/class/net/eth0/statistics/tx_bytes';
-        if (fs.existsSync(txPath)) currentTxBytes = parseInt(fs.readFileSync(txPath, 'utf8').trim(), 10);
+        if (fs.existsSync(txPath)) {
+          currentTxBytes = parseInt(fs.readFileSync(txPath, 'utf8').trim(), 10);
+        }
       } catch {}
     }
 
-    // Find or create monthly record
-    let record = await CostHistory.findOne({ month: currentMonthStr });
+    let record = await CostHistory.findOne({
+      month: currentMonthStr,
+      projectName,
+    });
+
     if (!record) {
-      record = new CostHistory({ month: currentMonthStr, lastMeasurementTime: now, lastTxBytes: currentTxBytes });
-      await record.save(); // Persist immediately to prevent re-creation
-    }
-
-    const minutesElapsed = (now.getTime() - new Date(record.lastMeasurementTime).getTime()) / 60000;
-
-    if (minutesElapsed > 0.01) { // Throttle: > ~0.6 seconds
-      const currentRssGB = rssBytes / (1024 * 1024 * 1024);
-
-      record.accumulatedMemoryMinutes += currentRssGB * minutesElapsed;
-      record.accumulatedCpuMinutes    += 0.1 * minutesElapsed; // Render starter = 0.1 vCPU
-
-      let deltaEgressBytes = 0;
-      if (currentTxBytes > 0 && record.lastTxBytes > 0 && currentTxBytes >= record.lastTxBytes)
-        deltaEgressBytes = currentTxBytes - record.lastTxBytes;
-      record.accumulatedEgressBytes += deltaEgressBytes;
-      record.lastTxBytes             = currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
-      record.lastMeasurementTime     = now;
-
-      // Price x2
-      const MEMORY_PRICE_PER_GB_MIN_X2 = 0.000231 * 2;
-      const CPU_PRICE_PER_VCPU_MIN_X2  = 0.000463 * 2;
-      const EGRESS_PRICE_PER_GB_X2     = 0.05 * 2;
-
-      record.memoryCost = record.accumulatedMemoryMinutes * MEMORY_PRICE_PER_GB_MIN_X2;
-      record.cpuCost    = record.accumulatedCpuMinutes    * CPU_PRICE_PER_VCPU_MIN_X2;
-      record.egressCost = (record.accumulatedEgressBytes / (1024 * 1024 * 1024)) * EGRESS_PRICE_PER_GB_X2;
-      record.totalCost  = record.memoryCost + record.cpuCost + record.egressCost;
+      record = new CostHistory({
+        month: currentMonthStr,
+        projectName,
+        lastMeasurementTime: now,
+        lastTxBytes: currentTxBytes,
+      });
 
       await record.save();
     }
 
-    // Running duration
+    const minutesElapsed =
+      (now.getTime() - new Date(record.lastMeasurementTime).getTime()) / 60000;
+
+    if (minutesElapsed > 0.01) {
+      const currentRssGB = rssBytes / 1024 / 1024 / 1024;
+
+      record.accumulatedMemoryMinutes += currentRssGB * minutesElapsed;
+      record.accumulatedCpuMinutes += 0.1 * minutesElapsed;
+
+      let deltaEgressBytes = 0;
+
+      if (
+        currentTxBytes > 0 &&
+        record.lastTxBytes > 0 &&
+        currentTxBytes >= record.lastTxBytes
+      ) {
+        deltaEgressBytes = currentTxBytes - record.lastTxBytes;
+      }
+
+      record.accumulatedEgressBytes += deltaEgressBytes;
+      record.lastTxBytes = currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
+      record.lastMeasurementTime = now;
+
+      const MEMORY_PRICE_PER_GB_MIN_X2 = 0.000231 * 2;
+      const CPU_PRICE_PER_VCPU_MIN_X2 = 0.000463 * 2;
+      const EGRESS_PRICE_PER_GB_X2 = 0.05 * 2;
+
+      record.memoryCost =
+        record.accumulatedMemoryMinutes * MEMORY_PRICE_PER_GB_MIN_X2;
+
+      record.cpuCost =
+        record.accumulatedCpuMinutes * CPU_PRICE_PER_VCPU_MIN_X2;
+
+      record.egressCost =
+        (record.accumulatedEgressBytes / 1024 / 1024 / 1024) *
+        EGRESS_PRICE_PER_GB_X2;
+
+      record.totalCost =
+        record.memoryCost + record.cpuCost + record.egressCost;
+
+      await record.save();
+    }
+
     const activeMinutes = record.accumulatedCpuMinutes / 0.1;
     const d = Math.floor(activeMinutes / 1440);
     const h = Math.floor((activeMinutes % 1440) / 60);
     const m = Math.floor(activeMinutes % 60);
 
     const currentCost = {
-      month:                      record.month,
-      runningDuration:            `${d}d ${h}h ${m}m`,
-      runningDays:                `${(activeMinutes / 1440).toFixed(2)} days`,
+      projectName: record.projectName,
+      month: record.month,
+      runningDuration: `${d}d ${h}h ${m}m`,
+      runningDays: `${(activeMinutes / 1440).toFixed(2)} days`,
       accumulatedMemoryGBMinutes: record.accumulatedMemoryMinutes.toFixed(2),
-      accumulatedCpuVCPUMinutes:  record.accumulatedCpuMinutes.toFixed(2),
-      accumulatedEgressGB:        (record.accumulatedEgressBytes / (1024 * 1024 * 1024)).toFixed(4),
-      memoryCost:                 `$${record.memoryCost.toFixed(4)}`,
-      cpuCost:                    `$${record.cpuCost.toFixed(4)}`,
-      egressCost:                 `$${record.egressCost.toFixed(4)}`,
-      totalCost:                  `$${record.totalCost.toFixed(4)}`,
+      accumulatedCpuVCPUMinutes: record.accumulatedCpuMinutes.toFixed(2),
+      accumulatedEgressGB:
+        (record.accumulatedEgressBytes / 1024 / 1024 / 1024).toFixed(4),
+      memoryCost: `$${record.memoryCost.toFixed(4)}`,
+      cpuCost: `$${record.cpuCost.toFixed(4)}`,
+      egressCost: `$${record.egressCost.toFixed(4)}`,
+      totalCost: `$${record.totalCost.toFixed(4)}`,
     };
 
-    const history = await CostHistory.find({}).sort({ month: -1 }).limit(5);
+    const history = await CostHistory
+      .find({ projectName })
+      .sort({ month: -1 })
+      .limit(5);
+
     const last5MonthsHistory = history.map((hist) => {
       const am = hist.accumulatedCpuMinutes / 0.1;
-      const hd = Math.floor(am / 1440), hh = Math.floor((am % 1440) / 60), hm = Math.floor(am % 60);
+      const hd = Math.floor(am / 1440);
+      const hh = Math.floor((am % 1440) / 60);
+      const hm = Math.floor(am % 60);
+
       return {
-        month:           hist.month,
+        projectName: hist.projectName,
+        month: hist.month,
         runningDuration: `${hd}d ${hh}h ${hm}m`,
-        memoryCost:      `$${hist.memoryCost.toFixed(4)}`,
-        cpuCost:         `$${hist.cpuCost.toFixed(4)}`,
-        egressCost:      `$${hist.egressCost.toFixed(4)}`,
-        totalCost:       `$${hist.totalCost.toFixed(4)}`,
+        memoryCost: `$${hist.memoryCost.toFixed(4)}`,
+        cpuCost: `$${hist.cpuCost.toFixed(4)}`,
+        egressCost: `$${hist.egressCost.toFixed(4)}`,
+        totalCost: `$${hist.totalCost.toFixed(4)}`,
       };
     });
 
-    return { currentMonth: currentCost, last5MonthsHistory };
+    return {
+      currentMonth: currentCost,
+      last5MonthsHistory,
+    };
   } catch (err) {
-    return { currentMonth: null, last5MonthsHistory: [], error: err.message };
+    return {
+      currentMonth: null,
+      last5MonthsHistory: [],
+      error: err.message,
+    };
   }
 }
 
-// ─── HTTP helpers ─────────────────────────────────────────────────────────────
 function sendJson(res, code, payload) {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+  });
+
   res.end(JSON.stringify(payload, null, 2));
 }
+
 function sendText(res, code, text) {
-  res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.writeHead(code, {
+    'Content-Type': 'text/plain; charset=utf-8',
+  });
+
   res.end(text);
 }
 
-// ─── /ram handler ─────────────────────────────────────────────────────────────
 async function handleRamRequest(req, res) {
-  const url   = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+  const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
   const token = url.searchParams.get('token') || req.headers['x-ram-token'];
 
-  // RAM_TOKEN = '' → public; RAM_TOKEN set → require match
   if (RAM_TOKEN && token !== RAM_TOKEN) {
     sendJson(res, 401, { error: 'Unauthorized' });
     return;
   }
 
   const { stats, rssBytes } = await buildMonitorStats();
-  const projectCost         = await updateCostHistory(rssBytes);
+  const projectCost = await updateCostHistory(rssBytes);
 
-  // Response shape mirrors route.ts: identity at top, then stats, then projectCost
   sendJson(res, 200, {
-    identity:    stats.identity,
-    cpu:         stats.cpu,
-    os:          stats.os,
-    node:        stats.node,
-    timestamp:   stats.timestamp,
-    ...(stats.freeCommandOutput ? { freeCommandOutput: stats.freeCommandOutput } : {}),
-    ...(stats.topProcesses      ? { topProcesses:      stats.topProcesses }      : {}),
-    ...(stats.memGuardLog       ? { memGuardLog:        stats.memGuardLog }       : {}),
-    ...(stats.diagnosticError   ? { diagnosticError:    stats.diagnosticError }   : {}),
+    identity: stats.identity,
+    cpu: stats.cpu,
+    os: stats.os,
+    node: stats.node,
+    timestamp: stats.timestamp,
+
+    ...(stats.freeCommandOutput
+      ? { freeCommandOutput: stats.freeCommandOutput }
+      : {}),
+
+    ...(stats.topProcesses
+      ? { topProcesses: stats.topProcesses }
+      : {}),
+
+    ...(stats.memGuardLog
+      ? { memGuardLog: stats.memGuardLog }
+      : {}),
+
+    ...(stats.diagnosticError
+      ? { diagnosticError: stats.diagnosticError }
+      : {}),
+
     projectCost: {
-      currentMonth:       projectCost.currentMonth,
+      currentMonth: projectCost.currentMonth,
       last5MonthsHistory: projectCost.last5MonthsHistory,
-      ...(projectCost.error    ? { error:    projectCost.error }    : {}),
-      ...(projectCost.disabled ? { disabled: projectCost.disabled } : {}),
+
+      ...(projectCost.error
+        ? { error: projectCost.error }
+        : {}),
+
+      ...(projectCost.disabled
+        ? { disabled: projectCost.disabled }
+        : {}),
     },
   });
 }
 
-// ─── n8n process ──────────────────────────────────────────────────────────────
 function startN8n() {
   const child = spawn('n8n', ['start'], {
     stdio: 'inherit',
-    env: { ...process.env, N8N_PORT: String(INTERNAL_N8N_PORT), N8N_LISTEN_ADDRESS: '127.0.0.1' },
+    env: {
+      ...process.env,
+      N8N_PORT: String(INTERNAL_N8N_PORT),
+      N8N_LISTEN_ADDRESS: '127.0.0.1',
+    },
   });
-  child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 0)));
+
+  child.on('exit', (code, signal) => {
+    process.exit(signal ? 1 : code ?? 0);
+  });
+
   return child;
 }
 
 function waitForPort(port, host, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
+
     function attempt() {
       const sock = new net.Socket();
+
       sock.setTimeout(1000);
-      sock.on('connect', () => { sock.destroy(); resolve(); });
-      sock.on('error',   () => { sock.destroy(); Date.now() - start >= timeoutMs ? reject(new Error(`Timeout waiting for ${host}:${port}`)) : setTimeout(attempt, 500); });
-      sock.on('timeout', () => { sock.destroy(); setTimeout(attempt, 500); });
+
+      sock.on('connect', () => {
+        sock.destroy();
+        resolve();
+      });
+
+      sock.on('error', () => {
+        sock.destroy();
+
+        if (Date.now() - start >= timeoutMs) {
+          reject(new Error(`Timeout waiting for ${host}:${port}`));
+        } else {
+          setTimeout(attempt, 500);
+        }
+      });
+
+      sock.on('timeout', () => {
+        sock.destroy();
+        setTimeout(attempt, 500);
+      });
+
       sock.connect(port, host);
     }
+
     attempt();
   });
 }
 
-// ─── Proxy + request queue ────────────────────────────────────────────────────
-let n8nReady     = false;
+let n8nReady = false;
 const pendingQueue = [];
 
 const proxy = httpProxy.createProxyServer({
   target: `http://127.0.0.1:${INTERNAL_N8N_PORT}`,
-  ws:     true,
-  xfwd:   true,
+  ws: true,
+  xfwd: true,
 });
 
 proxy.on('error', (err, req, res) => {
   console.error(`[proxy] ${err.message}`);
-  if (res && !res.headersSent) sendText(res, 502, `Proxy error: ${err.message}`);
+
+  if (res && !res.headersSent) {
+    sendText(res, 502, `Proxy error: ${err.message}`);
+  }
 });
 
-// ─── Security headers ─────────────────────────────────────────────────────────
-// Thêm vào mọi response để browser không cảnh báo "Dangerous site"
-// proxy.on('proxyRes') chạy SAU khi upstream trả header → an toàn để override
-proxy.on('proxyRes', (proxyRes, req, res) => {
-  // Ngăn browser đoán MIME type → chặn một số vector XSS
+proxy.on('proxyRes', (proxyRes) => {
   proxyRes.headers['x-content-type-options'] = 'nosniff';
-  // Không cho nhúng vào iframe từ domain khác
   proxyRes.headers['x-frame-options'] = 'SAMEORIGIN';
-  // Tắt XSS auditor cũ (đã deprecated nhưng vẫn cần cho Chrome cũ)
   proxyRes.headers['x-xss-protection'] = '1; mode=block';
-  // Chỉ gửi referrer khi cùng origin
   proxyRes.headers['referrer-policy'] = 'strict-origin-when-cross-origin';
-  // Không cache thông tin nhạy cảm ở proxy trung gian
-  proxyRes.headers['cache-control'] = proxyRes.headers['cache-control'] || 'no-store';
-  // HSTS: bắt buộc HTTPS trong 1 năm (Render đã có TLS nên safe)
-  proxyRes.headers['strict-transport-security'] = 'max-age=31536000; includeSubDomains';
-  // CSP: cho phép n8n load resource từ chính nó + inline script (n8n cần)
-  // Không dùng CSP quá chặt vì n8n frontend cần eval() và inline style
+  proxyRes.headers['cache-control'] =
+    proxyRes.headers['cache-control'] || 'no-store';
+  proxyRes.headers['strict-transport-security'] =
+    'max-age=31536000; includeSubDomains';
+
   proxyRes.headers['content-security-policy'] = [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
@@ -376,7 +557,7 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
     "connect-src 'self' wss: ws: https:",
     "frame-ancestors 'self'",
   ].join('; ');
-  // Xóa header lộ thông tin server
+
   delete proxyRes.headers['x-powered-by'];
   delete proxyRes.headers['server'];
 });
@@ -391,44 +572,61 @@ function applySecurityHeaders(res) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
-  if (url.pathname === '/ram') { await handleRamRequest(req, res); return; }
+
+  if (url.pathname === '/ram') {
+    await handleRamRequest(req, res);
+    return;
+  }
 
   if (!n8nReady) {
     applySecurityHeaders(res);
-    const timer = setTimeout(() => sendText(res, 503, 'n8n is starting, please retry'), 30000);
+
+    const timer = setTimeout(() => {
+      if (!res.writableEnded) {
+        sendText(res, 503, 'n8n is starting, please retry');
+      }
+    }, 30000);
+
     pendingQueue.push({ req, res, timer });
     return;
   }
+
   proxy.web(req, res);
 });
 
 server.on('upgrade', (req, socket, head) => {
-  if (!n8nReady) { socket.destroy(); return; }
+  if (!n8nReady) {
+    socket.destroy();
+    return;
+  }
+
   proxy.ws(req, socket, head);
 });
 
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
 let n8nChild = null;
+
 function shutdown(code) {
-  try { server.close(); } catch {}
-  if (n8nChild && !n8nChild.killed) n8nChild.kill('SIGTERM');
+  try {
+    server.close();
+  } catch {}
+
+  if (n8nChild && !n8nChild.killed) {
+    n8nChild.kill('SIGTERM');
+  }
+
   process.exit(code);
 }
-process.on('SIGTERM', () => shutdown(0));
-process.on('SIGINT',  () => shutdown(0));
 
-// ─── Boot sequence ────────────────────────────────────────────────────────────
-// 1. Mở public port NGAY để Render health-check không timeout
-// 2. Start n8n trong nền
-// 3. Poll TCP đến khi n8n sẵn sàng
-// 4. Xả queue
+process.on('SIGTERM', () => shutdown(0));
+process.on('SIGINT', () => shutdown(0));
+
 (async () => {
-  await new Promise((resolve) =>
+  await new Promise((resolve) => {
     server.listen(PUBLIC_PORT, '0.0.0.0', () => {
       console.log(`[wrapper] Port ${PUBLIC_PORT} open — waiting for n8n...`);
       resolve();
-    })
-  );
+    });
+  });
 
   n8nChild = startN8n();
 
@@ -440,18 +638,25 @@ process.on('SIGINT',  () => shutdown(0));
     return;
   }
 
-  console.log(`[wrapper] n8n ready — serving traffic`);
+  console.log('[wrapper] n8n ready — serving traffic');
   n8nReady = true;
 
   while (pendingQueue.length) {
     const { req, res, timer } = pendingQueue.shift();
+
     clearTimeout(timer);
-    if (!res.writableEnded) proxy.web(req, res);
+
+    if (!res.writableEnded) {
+      proxy.web(req, res);
+    }
   }
 })();
 EOF
 
 RUN chown -R node:node /app /home/node
+
 USER node
+
 EXPOSE 8080
+
 ENTRYPOINT ["node", "/app/server.js"]
