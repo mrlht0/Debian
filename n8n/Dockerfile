@@ -91,9 +91,11 @@ async function measureCpuPercent() {
   const endUsage = process.cpuUsage(startUsage);
   const hrEnd    = process.hrtime();
 
-  const elapsedMs = (hrEnd[0] * 1e9 + hrEnd[1] - (hrStart[0] * 1e9 + hrStart[1])) / 1e6;
-  const cpuPercentNode = elapsedMs > 0
-    ? (((endUsage.user + endUsage.system) / 1000 / elapsedMs) * 100).toFixed(2)
+  const elapTimeMS = (hrEnd[0] * 1e9 + hrEnd[1] - (hrStart[0] * 1e9 + hrStart[1])) / 1e6;
+  const elapUserMS = endUsage.user / 1000;
+  const elapSystMS = endUsage.system / 1000;
+  const cpuPercentNode = elapTimeMS > 0
+    ? (((elapUserMS + elapSystMS) / elapTimeMS) * 100).toFixed(2)
     : '0.00';
 
   let totalDiff = 0, idleDiff = 0;
@@ -112,7 +114,7 @@ async function measureCpuPercent() {
   };
 }
 
-// ─── Monitor stats (RAM + CPU + diagnostics + identity) ───────────────────────
+// ─── Monitor stats + diagnostics + identity ───────────────────────────────────
 async function buildMonitorStats() {
   const totalMem = os.totalmem();
   const freeMem  = os.freemem();
@@ -136,26 +138,21 @@ async function buildMonitorStats() {
     timestamp: new Date().toISOString(),
   };
 
-  // Linux-only diagnostics
+  // C. Linux diagnostics (free -h, top processes, mem_guard log)
   if (process.platform === 'linux') {
     try {
       stats.freeCommandOutput = safeExec('free -h');
       const ps = safeExec('ps aux --sort=-%mem | head -n 6');
       if (ps) stats.topProcesses = ps.split('\n');
-    } catch {}
+    } catch (e) { stats.diagnosticError = String(e); }
 
-    // mem_guard log
-    for (const p of ['/tmp/mem_guard.log', '/var/log/mem_guard.log', '/usr/local/bin/mem_guard.log', './mem_guard.log']) {
-      const tail = safeExec(`tail -n 5 "${p}" 2>/dev/null`);
+    for (const p of ['/tmp/mem_guard.log', '/var/log/mem_guard.log', './mem_guard.log']) {
+      const tail = safeExec(`tail -n 5 ${p} 2>/dev/null`);
       if (tail) { stats.memGuardLog = { path: p, lines: tail.split('\n') }; break; }
     }
   }
 
-  // ram shortcut
-  const ramOut = safeExec('ram');
-  if (ramOut) stats.ramCommandOutput = ramOut;
-
-  // Identity
+  // E. Machine & project identity
   try {
     const pkgFile = path.join(process.cwd(), 'package.json');
     const pkg     = fs.existsSync(pkgFile) ? JSON.parse(fs.readFileSync(pkgFile, 'utf8')) : {};
@@ -169,22 +166,22 @@ async function buildMonitorStats() {
              .filter((i) => i && !i.internal && i.family === 'IPv4')
              .map((i) => i.address),
     };
-  } catch { stats.identity = { hostname: os.hostname() }; }
+  } catch (e) { stats.identity = { error: String(e), hostname: os.hostname() }; }
 
   return { stats, rssBytes: mem.rss };
 }
 
-// ─── Cost history ─────────────────────────────────────────────────────────────
+// ─── Cost history (D. Project cost x2 rates) ──────────────────────────────────
 async function updateCostHistory(rssBytes) {
   if (!MONGODB_URI) return { currentMonth: null, last5MonthsHistory: [], disabled: true };
 
-  let dbError = null;
   try {
     await connectToMongo();
 
-    const now            = new Date();
+    const now             = new Date();
     const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
+    // Network egress delta
     let currentTxBytes = 0;
     if (process.platform === 'linux') {
       try {
@@ -193,24 +190,38 @@ async function updateCostHistory(rssBytes) {
       } catch {}
     }
 
+    // Find or create monthly record
     let record = await CostHistory.findOne({ month: currentMonthStr });
     if (!record) {
       record = new CostHistory({ month: currentMonthStr, lastMeasurementTime: now, lastTxBytes: currentTxBytes });
-      await record.save();
+      await record.save(); // Persist immediately to prevent re-creation
     }
 
-    const minutesElapsed = (now - new Date(record.lastMeasurementTime)) / 60000;
-    if (minutesElapsed > 0.01) {
-      record.accumulatedMemoryMinutes += (rssBytes / (1024 ** 3)) * minutesElapsed;
-      record.accumulatedCpuMinutes    += 0.1 * minutesElapsed;
+    const minutesElapsed = (now.getTime() - new Date(record.lastMeasurementTime).getTime()) / 60000;
+
+    if (minutesElapsed > 0.01) { // Throttle: > ~0.6 seconds
+      const currentRssGB = rssBytes / (1024 * 1024 * 1024);
+
+      record.accumulatedMemoryMinutes += currentRssGB * minutesElapsed;
+      record.accumulatedCpuMinutes    += 0.1 * minutesElapsed; // Render starter = 0.1 vCPU
+
+      let deltaEgressBytes = 0;
       if (currentTxBytes > 0 && record.lastTxBytes > 0 && currentTxBytes >= record.lastTxBytes)
-        record.accumulatedEgressBytes += currentTxBytes - record.lastTxBytes;
-      record.lastTxBytes        = currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
-      record.lastMeasurementTime = now;
-      record.memoryCost = record.accumulatedMemoryMinutes * (0.000231 * 2);
-      record.cpuCost    = record.accumulatedCpuMinutes    * (0.000463 * 2);
-      record.egressCost = (record.accumulatedEgressBytes / (1024 ** 3)) * (0.05 * 2);
+        deltaEgressBytes = currentTxBytes - record.lastTxBytes;
+      record.accumulatedEgressBytes += deltaEgressBytes;
+      record.lastTxBytes             = currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
+      record.lastMeasurementTime     = now;
+
+      // Price x2
+      const MEMORY_PRICE_PER_GB_MIN_X2 = 0.000231 * 2;
+      const CPU_PRICE_PER_VCPU_MIN_X2  = 0.000463 * 2;
+      const EGRESS_PRICE_PER_GB_X2     = 0.05 * 2;
+
+      record.memoryCost = record.accumulatedMemoryMinutes * MEMORY_PRICE_PER_GB_MIN_X2;
+      record.cpuCost    = record.accumulatedCpuMinutes    * CPU_PRICE_PER_VCPU_MIN_X2;
+      record.egressCost = (record.accumulatedEgressBytes / (1024 * 1024 * 1024)) * EGRESS_PRICE_PER_GB_X2;
       record.totalCost  = record.memoryCost + record.cpuCost + record.egressCost;
+
       await record.save();
     }
 
@@ -226,7 +237,7 @@ async function updateCostHistory(rssBytes) {
       runningDays:                `${(activeMinutes / 1440).toFixed(2)} days`,
       accumulatedMemoryGBMinutes: record.accumulatedMemoryMinutes.toFixed(2),
       accumulatedCpuVCPUMinutes:  record.accumulatedCpuMinutes.toFixed(2),
-      accumulatedEgressGB:        (record.accumulatedEgressBytes / (1024 ** 3)).toFixed(4),
+      accumulatedEgressGB:        (record.accumulatedEgressBytes / (1024 * 1024 * 1024)).toFixed(4),
       memoryCost:                 `$${record.memoryCost.toFixed(4)}`,
       cpuCost:                    `$${record.cpuCost.toFixed(4)}`,
       egressCost:                 `$${record.egressCost.toFixed(4)}`,
@@ -234,16 +245,16 @@ async function updateCostHistory(rssBytes) {
     };
 
     const history = await CostHistory.find({}).sort({ month: -1 }).limit(5);
-    const last5MonthsHistory = history.map((h) => {
-      const am = h.accumulatedCpuMinutes / 0.1;
-      const dd = Math.floor(am / 1440), hh = Math.floor((am % 1440) / 60), mm = Math.floor(am % 60);
+    const last5MonthsHistory = history.map((hist) => {
+      const am = hist.accumulatedCpuMinutes / 0.1;
+      const hd = Math.floor(am / 1440), hh = Math.floor((am % 1440) / 60), hm = Math.floor(am % 60);
       return {
-        month:           h.month,
-        runningDuration: `${dd}d ${hh}h ${mm}m`,
-        memoryCost:      `$${h.memoryCost.toFixed(4)}`,
-        cpuCost:         `$${h.cpuCost.toFixed(4)}`,
-        egressCost:      `$${h.egressCost.toFixed(4)}`,
-        totalCost:       `$${h.totalCost.toFixed(4)}`,
+        month:           hist.month,
+        runningDuration: `${hd}d ${hh}h ${hm}m`,
+        memoryCost:      `$${hist.memoryCost.toFixed(4)}`,
+        cpuCost:         `$${hist.cpuCost.toFixed(4)}`,
+        egressCost:      `$${hist.egressCost.toFixed(4)}`,
+        totalCost:       `$${hist.totalCost.toFixed(4)}`,
       };
     });
 
@@ -265,14 +276,36 @@ function sendText(res, code, text) {
 
 // ─── /ram handler ─────────────────────────────────────────────────────────────
 async function handleRamRequest(req, res) {
-  if (RAM_TOKEN) {
-    const url   = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
-    const token = url.searchParams.get('token') || req.headers['x-ram-token'];
-    if (token !== RAM_TOKEN) { sendJson(res, 401, { error: 'Unauthorized' }); return; }
+  const url   = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+  const token = url.searchParams.get('token') || req.headers['x-ram-token'];
+
+  // RAM_TOKEN = '' → public; RAM_TOKEN set → require match
+  if (RAM_TOKEN && token !== RAM_TOKEN) {
+    sendJson(res, 401, { error: 'Unauthorized' });
+    return;
   }
+
   const { stats, rssBytes } = await buildMonitorStats();
   const projectCost         = await updateCostHistory(rssBytes);
-  sendJson(res, 200, { ...stats, projectCost });
+
+  // Response shape mirrors route.ts: identity at top, then stats, then projectCost
+  sendJson(res, 200, {
+    identity:    stats.identity,
+    cpu:         stats.cpu,
+    os:          stats.os,
+    node:        stats.node,
+    timestamp:   stats.timestamp,
+    ...(stats.freeCommandOutput ? { freeCommandOutput: stats.freeCommandOutput } : {}),
+    ...(stats.topProcesses      ? { topProcesses:      stats.topProcesses }      : {}),
+    ...(stats.memGuardLog       ? { memGuardLog:        stats.memGuardLog }       : {}),
+    ...(stats.diagnosticError   ? { diagnosticError:    stats.diagnosticError }   : {}),
+    projectCost: {
+      currentMonth:       projectCost.currentMonth,
+      last5MonthsHistory: projectCost.last5MonthsHistory,
+      ...(projectCost.error    ? { error:    projectCost.error }    : {}),
+      ...(projectCost.disabled ? { disabled: projectCost.disabled } : {}),
+    },
+  });
 }
 
 // ─── n8n process ──────────────────────────────────────────────────────────────
