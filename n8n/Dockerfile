@@ -650,14 +650,20 @@ async function handleRamRequest(req, res) {
 }
 
 function startN8n() {
+  const n8nEnv = {
+    ...process.env,
+    N8N_PORT: String(INTERNAL_N8N_PORT),
+    N8N_LISTEN_ADDRESS: '127.0.0.1',
+  };
+
+  if (!n8nEnv.WEBHOOK_URL && n8nEnv.RENDER_EXTERNAL_URL) {
+    n8nEnv.WEBHOOK_URL = n8nEnv.RENDER_EXTERNAL_URL;
+  }
+
   const child = spawn('n8n', ['start'], {
     stdio: 'inherit',
 
-    env: {
-      ...process.env,
-      N8N_PORT: String(INTERNAL_N8N_PORT),
-      N8N_LISTEN_ADDRESS: '127.0.0.1',
-    },
+    env: n8nEnv,
   });
 
   child.on('exit', (code, signal) => {
