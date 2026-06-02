@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+
+# Base image:
+# n8n is already included here, so there is no custom proxy layer and no extra install step.
+FROM n8nio/n8n:2.22.4
+
+# Keep n8n small and predictable:
+# - run everything in the main process
+# - do not load community packages
+# - disable verbose save behavior
+# - allow the Code node to read local system stats and optional MongoDB
+ENV N8N_HIRING_BANNER=false \
+    N8N_DIAGNOSTICS_ENABLED=false \
+    N8N_RUNNERS_ENABLED=false \
+    N8N_COMMUNITY_PACKAGES_ENABLED=false \
+    EXECUTIONS_PROCESS=main \
+    EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+    EXECUTIONS_DATA_SAVE_ON_ERROR=none \
+    EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+    N8N_PORT=8080 \
+    N8N_LISTEN_ADDRESS=0.0.0.0 \
+    MONGODB_URI=mongodb+srv://tylauj04:t482169@cluster0.ygab0.mongodb.net \
+    NODE_FUNCTION_ALLOW_BUILTIN=os,fs,child_process \
+    NODE_FUNCTION_ALLOW_EXTERNAL=mongodb
+
+# All runtime files stay under /home/node so the official image can run normally.
+WORKDIR /home/node
+
+# Only one public port exists; Render will map its PORT to this container.
+EXPOSE 8080
+
+# The official image entrypoint already invokes the n8n binary.
+# Pass only the subcommand here so we do not double-prefix the command name.
+CMD ["start"]
