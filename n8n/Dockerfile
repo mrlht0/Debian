@@ -11,13 +11,15 @@ ENV N8N_PORT=5678 \
     EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
     EXECUTIONS_DATA_SAVE_ON_ERROR=none \
     EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+    NODE_FUNCTION_ALLOW_BUILTIN=* \
+    NODE_FUNCTION_ALLOW_EXTERNAL=* \
     NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
 
 WORKDIR /app
 USER root
 
 RUN npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose
+    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
