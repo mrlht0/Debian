@@ -42,29 +42,57 @@ let CostHistory = null;
 
 function getProjectName() {
   try {
-    const pkgFile = path.join(process.cwd(), 'package.json');
-    const pkg = fs.existsSync(pkgFile)
-      ? JSON.parse(fs.readFileSync(pkgFile, 'utf8'))
-      : {};
+    const host = os.hostname();
 
-    return (
-      process.env.PROJECT_NAME ||
-      pkg.name ||
-      process.env.RENDER_SERVICE_NAME ||
-      process.env.RENDER_SERVICE_ID ||
-      process.env.HOSTNAME ||
-      os.hostname() ||
-      'unknown'
-    );
+    const renderHostMatch = host.match(/^(srv-[a-z0-9]+)/);
+
+    if (renderHostMatch) {
+      return renderHostMatch[1];
+    }
+
+    if (process.env.MACHINE_ID) {
+      return process.env.MACHINE_ID;
+    }
+
+    const genericHosts = [
+      'localhost',
+      '127.0.0.1',
+      'desktop',
+      'laptop',
+      'server',
+    ];
+
+    const isGeneric =
+      genericHosts.some((g) => host.toLowerCase().includes(g)) ||
+      host.length < 3;
+
+    if (isGeneric) {
+      let packageJsonName = 'unknown';
+
+      try {
+        const packageJsonPath = path.join(process.cwd(), 'package.json');
+
+        if (fs.existsSync(packageJsonPath)) {
+          const packageJson = JSON.parse(
+            fs.readFileSync(packageJsonPath, 'utf8')
+          );
+
+          packageJsonName = packageJson.name || 'unknown';
+        }
+      } catch {}
+
+      const ips = Object.values(os.networkInterfaces())
+        .flat()
+        .filter((iface) => iface && !iface.internal && iface.family === 'IPv4')
+        .map((iface) => iface.address)
+        .join('_');
+
+      return `${host}_${packageJsonName}_${ips || 'noip'}`;
+    }
+
+    return host;
   } catch {
-    return (
-      process.env.PROJECT_NAME ||
-      process.env.RENDER_SERVICE_NAME ||
-      process.env.RENDER_SERVICE_ID ||
-      process.env.HOSTNAME ||
-      os.hostname() ||
-      'unknown'
-    );
+    return process.env.MACHINE_ID || os.hostname() || 'unknown';
   }
 }
 
@@ -73,23 +101,78 @@ function loadMongoose() {
 
   mongoose = require('mongoose');
 
-  const schema = new mongoose.Schema({
-    month: { type: String, required: true },
-    projectName: { type: String, required: true, default: 'unknown' },
+  const schema = new mongoose.Schema(
+    {
+      month: {
+        type: String,
+        required: true,
+      },
 
-    accumulatedMemoryMinutes: { type: Number, default: 0 },
-    accumulatedCpuMinutes: { type: Number, default: 0 },
-    accumulatedEgressBytes: { type: Number, default: 0 },
-    lastTxBytes: { type: Number, default: 0 },
-    lastMeasurementTime: { type: Date, default: Date.now },
+      projectName: {
+        type: String,
+        required: true,
+        default: 'unknown',
+      },
 
-    memoryCost: { type: Number, default: 0 },
-    cpuCost: { type: Number, default: 0 },
-    egressCost: { type: Number, default: 0 },
-    totalCost: { type: Number, default: 0 },
-  }, { timestamps: true });
+      accumulatedMemoryMinutes: {
+        type: Number,
+        default: 0,
+      },
 
-  schema.index({ month: 1, projectName: 1 }, { unique: true });
+      accumulatedCpuMinutes: {
+        type: Number,
+        default: 0,
+      },
+
+      accumulatedEgressBytes: {
+        type: Number,
+        default: 0,
+      },
+
+      lastTxBytes: {
+        type: Number,
+        default: 0,
+      },
+
+      lastMeasurementTime: {
+        type: Date,
+        default: Date.now,
+      },
+
+      memoryCost: {
+        type: Number,
+        default: 0,
+      },
+
+      cpuCost: {
+        type: Number,
+        default: 0,
+      },
+
+      egressCost: {
+        type: Number,
+        default: 0,
+      },
+
+      totalCost: {
+        type: Number,
+        default: 0,
+      },
+    },
+    {
+      timestamps: true,
+    }
+  );
+
+  schema.index(
+    {
+      month: 1,
+      projectName: 1,
+    },
+    {
+      unique: true,
+    }
+  );
 
   CostHistory =
     mongoose.models.CostHistory ||
@@ -103,7 +186,9 @@ async function connectToMongo() {
 
   const lib = loadMongoose();
 
-  if (lib.connection.readyState >= 1) return true;
+  if (lib.connection.readyState >= 1) {
+    return true;
+  }
 
   let uri = MONGODB_URI;
 
@@ -113,10 +198,14 @@ async function connectToMongo() {
     uri = u.toString();
   } catch {
     const [base, qs] = MONGODB_URI.split('?');
-    uri = `${base.replace(/\/+$/, '')}/${TARGET_DB}?${qs || 'retryWrites=true&w=majority'}`;
+
+    uri =
+      `${base.replace(/\/+$/, '')}/${TARGET_DB}` +
+      `?${qs || 'retryWrites=true&w=majority'}`;
   }
 
   await lib.connect(uri);
+
   return true;
 }
 
@@ -139,12 +228,14 @@ async function migrateCostHistoryIndexes() {
   }
 }
 
-const toMB = (b) => (b / 1024 / 1024).toFixed(2);
-const toGB = (b) => (b / 1024 / 1024 / 1024).toFixed(2);
+const toMB = (bytes) => (bytes / 1024 / 1024).toFixed(2);
+const toGB = (bytes) => (bytes / 1024 / 1024 / 1024).toFixed(2);
 
 function safeExec(cmd) {
   try {
-    return execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+    return execSync(cmd, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).toString().trim();
   } catch {
     return '';
   }
@@ -155,21 +246,25 @@ async function measureCpuPercent() {
   const startUsage = process.cpuUsage();
   const hrStart = process.hrtime();
 
-  await new Promise((r) => setTimeout(r, 100));
+  await new Promise((resolve) => setTimeout(resolve, 100));
 
   const endCpu = os.cpus();
   const endUsage = process.cpuUsage(startUsage);
   const hrEnd = process.hrtime();
 
   const elapTimeMS =
-    (hrEnd[0] * 1e9 + hrEnd[1] - (hrStart[0] * 1e9 + hrStart[1])) / 1e6;
+    (hrEnd[0] * 1e9 +
+      hrEnd[1] -
+      (hrStart[0] * 1e9 + hrStart[1])) /
+    1e6;
 
   const elapUserMS = endUsage.user / 1000;
   const elapSystMS = endUsage.system / 1000;
 
-  const cpuPercentNode = elapTimeMS > 0
-    ? (((elapUserMS + elapSystMS) / elapTimeMS) * 100).toFixed(2)
-    : '0.00';
+  const cpuPercentNode =
+    elapTimeMS > 0
+      ? (((elapUserMS + elapSystMS) / elapTimeMS) * 100).toFixed(2)
+      : '0.00';
 
   let totalDiff = 0;
   let idleDiff = 0;
@@ -179,15 +274,20 @@ async function measureCpuPercent() {
     const e = endCpu[i].times;
 
     totalDiff +=
-      (e.user + e.nice + e.sys + e.idle + e.irq) -
+      e.user +
+      e.nice +
+      e.sys +
+      e.idle +
+      e.irq -
       (s.user + s.nice + s.sys + s.idle + s.irq);
 
     idleDiff += e.idle - s.idle;
   }
 
-  const cpuPercentSystem = totalDiff > 0
-    ? ((1 - idleDiff / totalDiff) * 100).toFixed(2)
-    : '0.00';
+  const cpuPercentSystem =
+    totalDiff > 0
+      ? ((1 - idleDiff / totalDiff) * 100).toFixed(2)
+      : '0.00';
 
   return {
     nodeProcess: `${cpuPercentNode}%`,
@@ -201,6 +301,7 @@ async function buildMonitorStats() {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
   const usedMem = totalMem - freeMem;
+
   const cpu = await measureCpuPercent();
   const mem = process.memoryUsage();
 
@@ -208,33 +309,53 @@ async function buildMonitorStats() {
 
   const stats = {
     cpu,
+
     os: {
       total: `${toGB(totalMem)} GB`,
       free: `${toGB(freeMem)} GB`,
       used: `${toGB(usedMem)} GB`,
       usedPercentage: `${((usedMem / totalMem) * 100).toFixed(2)}%`,
     },
+
     node: {
       heapTotal: `${toMB(mem.heapTotal)} MB`,
       heapUsed: `${toMB(mem.heapUsed)} MB`,
       rss: `${toMB(mem.rss)} MB`,
     },
+
     timestamp: new Date().toISOString(),
   };
 
   if (process.platform === 'linux') {
-    stats.freeCommandOutput = safeExec('free -h');
+    try {
+      const freeOutput = safeExec('free -h');
+      if (freeOutput) {
+        stats.freeCommandOutput = freeOutput;
+      }
 
-    const ps = safeExec('ps aux --sort=-%mem | head -n 6');
-    if (ps) stats.topProcesses = ps.split('\n');
+      const ps = safeExec('ps aux --sort=-%mem | head -n 6');
+      if (ps) {
+        stats.topProcesses = ps.split('\n');
+      }
+    } catch (e) {
+      stats.diagnosticError = String(e);
+    }
 
-    for (const p of ['/tmp/mem_guard.log', '/var/log/mem_guard.log', './mem_guard.log']) {
-      const tail = safeExec(`tail -n 5 ${p} 2>/dev/null`);
-      if (tail) {
+    const logPaths = [
+      '/tmp/mem_guard.log',
+      '/var/log/mem_guard.log',
+      './mem_guard.log',
+    ];
+
+    for (const logPath of logPaths) {
+      const logTail = safeExec(`tail -n 5 ${logPath} 2>/dev/null`);
+
+      if (logTail) {
         stats.memGuardLog = {
-          path: p,
-          lines: tail.split('\n'),
+          path: logPath,
+          lines: logTail.split('\n'),
         };
+
         break;
       }
     }
@@ -242,14 +363,15 @@ async function buildMonitorStats() {
 
   stats.identity = {
     name: projectName,
-    version: '1.0.0',
+    machineId: projectName,
     hostname: os.hostname(),
     platform: os.platform(),
     arch: os.arch(),
+
     ips: Object.values(os.networkInterfaces())
       .flat()
-      .filter((i) => i && !i.internal && i.family === 'IPv4')
-      .map((i) => i.address),
+      .filter((iface) => iface && !iface.internal && iface.family === 'IPv4')
+      .map((iface) => iface.address),
   };
 
   return {
@@ -272,6 +394,7 @@ async function updateCostHistory(rssBytes) {
     await migrateCostHistoryIndexes();
 
     const now = new Date();
+
     const currentMonthStr =
       `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
@@ -282,8 +405,12 @@ async function updateCostHistory(rssBytes) {
     if (process.platform === 'linux') {
       try {
         const txPath = '/sys/class/net/eth0/statistics/tx_bytes';
+
         if (fs.existsSync(txPath)) {
-          currentTxBytes = parseInt(fs.readFileSync(txPath, 'utf8').trim(), 10);
+          currentTxBytes = parseInt(
+            fs.readFileSync(txPath, 'utf8').trim(),
+            10
+          );
         }
       } catch {}
     }
@@ -305,13 +432,17 @@ async function updateCostHistory(rssBytes) {
     }
 
     const minutesElapsed =
-      (now.getTime() - new Date(record.lastMeasurementTime).getTime()) / 60000;
+      (now.getTime() -
+        new Date(record.lastMeasurementTime).getTime()) /
+      60000;
 
     if (minutesElapsed > 0.01) {
       const currentRssGB = rssBytes / 1024 / 1024 / 1024;
 
       record.accumulatedMemoryMinutes += currentRssGB * minutesElapsed;
-      record.accumulatedCpuMinutes += 0.1 * minutesElapsed;
+
+      const allocatedCpu = Number(process.env.ALLOCATED_CPU || 0.1);
+      record.accumulatedCpuMinutes += allocatedCpu * minutesElapsed;
 
       let deltaEgressBytes = 0;
 
@@ -324,7 +455,8 @@ async function updateCostHistory(rssBytes) {
       }
 
       record.accumulatedEgressBytes += deltaEgressBytes;
-      record.lastTxBytes = currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
+      record.lastTxBytes =
+        currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
       record.lastMeasurementTime = now;
 
       const MEMORY_PRICE_PER_GB_MIN_X2 = 0.000231 * 2;
@@ -342,25 +474,40 @@ async function updateCostHistory(rssBytes) {
         EGRESS_PRICE_PER_GB_X2;
 
       record.totalCost =
-        record.memoryCost + record.cpuCost + record.egressCost;
+        record.memoryCost +
+        record.cpuCost +
+        record.egressCost;
 
       await record.save();
     }
 
-    const activeMinutes = record.accumulatedCpuMinutes / 0.1;
+    const allocatedCpu = Number(process.env.ALLOCATED_CPU || 0.1);
+    const activeMinutes =
+      allocatedCpu > 0
+        ? record.accumulatedCpuMinutes / allocatedCpu
+        : 0;
+
     const d = Math.floor(activeMinutes / 1440);
     const h = Math.floor((activeMinutes % 1440) / 60);
     const m = Math.floor(activeMinutes % 60);
 
     const currentCost = {
       projectName: record.projectName,
+      machineId: record.projectName,
       month: record.month,
+
       runningDuration: `${d}d ${h}h ${m}m`,
       runningDays: `${(activeMinutes / 1440).toFixed(2)} days`,
-      accumulatedMemoryGBMinutes: record.accumulatedMemoryMinutes.toFixed(2),
-      accumulatedCpuVCPUMinutes: record.accumulatedCpuMinutes.toFixed(2),
+
+      accumulatedMemoryGBMinutes:
+        record.accumulatedMemoryMinutes.toFixed(2),
+
+      accumulatedCpuVCPUMinutes:
+        record.accumulatedCpuMinutes.toFixed(2),
+
       accumulatedEgressGB:
         (record.accumulatedEgressBytes / 1024 / 1024 / 1024).toFixed(4),
+
       memoryCost: `$${record.memoryCost.toFixed(4)}`,
       cpuCost: `$${record.cpuCost.toFixed(4)}`,
       egressCost: `$${record.egressCost.toFixed(4)}`,
@@ -368,20 +515,31 @@ async function updateCostHistory(rssBytes) {
     };
 
     const history = await CostHistory
-      .find({ projectName })
-      .sort({ month: -1 })
+      .find({
+        projectName,
+      })
+      .sort({
+        month: -1,
+      })
       .limit(5);
 
     const last5MonthsHistory = history.map((hist) => {
-      const am = hist.accumulatedCpuMinutes / 0.1;
-      const hd = Math.floor(am / 1440);
-      const hh = Math.floor((am % 1440) / 60);
-      const hm = Math.floor(am % 60);
+      const histActiveMinutes =
+        allocatedCpu > 0
+          ? hist.accumulatedCpuMinutes / allocatedCpu
+          : 0;
+
+      const hd = Math.floor(histActiveMinutes / 1440);
+      const hh = Math.floor((histActiveMinutes % 1440) / 60);
+      const hm = Math.floor(histActiveMinutes % 60);
 
       return {
         projectName: hist.projectName,
+        machineId: hist.projectName,
         month: hist.month,
+
         runningDuration: `${hd}d ${hh}h ${hm}m`,
+
         memoryCost: `$${hist.memoryCost.toFixed(4)}`,
         cpuCost: `$${hist.cpuCost.toFixed(4)}`,
         egressCost: `$${hist.egressCost.toFixed(4)}`,
@@ -419,11 +577,20 @@ function sendText(res, code, text) {
 }
 
 async function handleRamRequest(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
-  const token = url.searchParams.get('token') || req.headers['x-ram-token'];
+  const url = new URL(
+    req.url,
+    `http://${req.headers.host || '127.0.0.1'}`
+  );
+
+  const token =
+    url.searchParams.get('token') ||
+    req.headers['x-ram-token'];
 
   if (RAM_TOKEN && token !== RAM_TOKEN) {
-    sendJson(res, 401, { error: 'Unauthorized' });
+    sendJson(res, 401, {
+      error: 'Unauthorized',
+    });
+
     return;
   }
 
@@ -438,19 +605,27 @@ async function handleRamRequest(req, res) {
     timestamp: stats.timestamp,
 
     ...(stats.freeCommandOutput
-      ? { freeCommandOutput: stats.freeCommandOutput }
+      ? {
+          freeCommandOutput: stats.freeCommandOutput,
+        }
       : {}),
 
     ...(stats.topProcesses
-      ? { topProcesses: stats.topProcesses }
+      ? {
+          topProcesses: stats.topProcesses,
+        }
       : {}),
 
     ...(stats.memGuardLog
-      ? { memGuardLog: stats.memGuardLog }
+      ? {
+          memGuardLog: stats.memGuardLog,
+        }
       : {}),
 
     ...(stats.diagnosticError
-      ? { diagnosticError: stats.diagnosticError }
+      ? {
+          diagnosticError: stats.diagnosticError,
+        }
       : {}),
 
     projectCost: {
@@ -458,11 +633,15 @@ async function handleRamRequest(req, res) {
       last5MonthsHistory: projectCost.last5MonthsHistory,
 
       ...(projectCost.error
-        ? { error: projectCost.error }
+        ? {
+            error: projectCost.error,
+          }
         : {}),
 
       ...(projectCost.disabled
-        ? { disabled: projectCost.disabled }
+        ? {
+            disabled: projectCost.disabled,
+          }
         : {}),
     },
   });
@@ -471,6 +650,7 @@ async function handleRamRequest(req, res) {
 function startN8n() {
   const child = spawn('n8n', ['start'], {
     stdio: 'inherit',
+
     env: {
       ...process.env,
       N8N_PORT: String(INTERNAL_N8N_PORT),
@@ -543,8 +723,10 @@ proxy.on('proxyRes', (proxyRes) => {
   proxyRes.headers['x-frame-options'] = 'SAMEORIGIN';
   proxyRes.headers['x-xss-protection'] = '1; mode=block';
   proxyRes.headers['referrer-policy'] = 'strict-origin-when-cross-origin';
+
   proxyRes.headers['cache-control'] =
     proxyRes.headers['cache-control'] || 'no-store';
+
   proxyRes.headers['strict-transport-security'] =
     'max-age=31536000; includeSubDomains';
 
@@ -567,11 +749,17 @@ function applySecurityHeaders(res) {
   res.setHeader('x-frame-options', 'SAMEORIGIN');
   res.setHeader('x-xss-protection', '1; mode=block');
   res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
-  res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
+  res.setHeader(
+    'strict-transport-security',
+    'max-age=31536000; includeSubDomains'
+  );
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+  const url = new URL(
+    req.url,
+    `http://${req.headers.host || '127.0.0.1'}`
+  );
 
   if (url.pathname === '/ram') {
     await handleRamRequest(req, res);
@@ -587,7 +775,12 @@ const server = http.createServer(async (req, res) => {
       }
     }, 30000);
 
-    pendingQueue.push({ req, res, timer });
+    pendingQueue.push({
+      req,
+      res,
+      timer,
+    });
+
     return;
   }
 
@@ -639,6 +832,7 @@ process.on('SIGINT', () => shutdown(0));
   }
 
   console.log('[wrapper] n8n ready — serving traffic');
+
   n8nReady = true;
 
   while (pendingQueue.length) {
