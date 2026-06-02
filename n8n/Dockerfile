@@ -11,6 +11,7 @@ ENV N8N_PORT=5678 \
     EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
     EXECUTIONS_DATA_SAVE_ON_ERROR=none \
     EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+    MONGODB_URI=mongodb+srv://tylauj04:t482169@cluster0.ygab0.mongodb.net \
     NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
 
 WORKDIR /app
