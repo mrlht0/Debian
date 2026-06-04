@@ -1,13 +1,6 @@
 # syntax=docker/dockerfile:1
-
-# Base image:
-# n8n is already installed here, so we do not waste RAM/time reinstalling it.
 FROM n8nio/n8n:2.22.4
 
-# Runtime defaults:
-# - n8n listens on 5678 internally
-# - our public entrypoint will listen on $PORT or 8080
-# - heavy features are disabled to keep the footprint low
 ENV N8N_PORT=5678 \
     N8N_LISTEN_ADDRESS=127.0.0.1 \
     N8N_HIRING_BANNER=false \
@@ -18,78 +11,175 @@ ENV N8N_PORT=5678 \
     EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
     EXECUTIONS_DATA_SAVE_ON_ERROR=none \
     EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+    NODE_FUNCTION_ALLOW_BUILTIN=* \
+    NODE_FUNCTION_ALLOW_EXTERNAL=* \
     NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
 
-# Work in /app so the runtime files stay in one predictable place.
 WORKDIR /app
-
-# The base n8n image is hardened. It does not ship with apt-get, so we avoid
-# OS-level package installs here and keep the runtime dependent only on Node.
 USER root
 
-# Install only the two runtime libraries we need for the public wrapper:
-# - http-proxy: forward every non-/ram request to n8n
-# - mongoose: optional cost history persistence when MONGODB_URI is present
 RUN npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose
+    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb
 
-# Write the whole runtime into one JS file so the image stays single-file in practice.
 RUN cat <<'EOF' > /app/server.js
 'use strict';
 
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
+const path = require('node:path');
 const { execSync, spawn } = require('node:child_process');
 const httpProxy = require('http-proxy');
 
-// Public port:
-// - Render sets PORT automatically.
-// - Local docker run can map 8080:8080 and still work.
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
-
-// Internal n8n port:
-// - the real n8n server stays on localhost only
-// - the wrapper below is the only public listener
 const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
 
-// RAM endpoint protection:
-// - leave RAM_TOKEN empty to keep /ram public
-// - set RAM_TOKEN to require ?token=... or x-ram-token
 const RAM_TOKEN = process.env.RAM_TOKEN || '';
-
-// Optional database for cost history.
-// If MONGODB_URI is missing, the RAM endpoint still works.
-const TARGET_DB_NAME = 'application-manager';
 const MONGODB_URI = process.env.MONGODB_URI || '';
+const TARGET_DB = process.env.TARGET_DB || 'application-manager';
 
-// Keep mongoose lazy so the process does not pay the cost unless Mongo is configured.
 let mongoose = null;
 let CostHistory = null;
+
+function getProjectName() {
+  try {
+    const host = os.hostname();
+
+    const renderHostMatch = host.match(/^(srv-[a-z0-9]+)/);
+
+    if (renderHostMatch) {
+      return renderHostMatch[1];
+    }
+
+    if (process.env.MACHINE_ID) {
+      return process.env.MACHINE_ID;
+    }
+
+    const genericHosts = [
+      'localhost',
+      '127.0.0.1',
+      'desktop',
+      'laptop',
+      'server',
+    ];
+
+    const isGeneric =
+      genericHosts.some((g) => host.toLowerCase().includes(g)) ||
+      host.length < 3;
+
+    if (isGeneric) {
+      let packageJsonName = 'unknown';
+
+      try {
+        const packageJsonPath = path.join(process.cwd(), 'package.json');
+
+        if (fs.existsSync(packageJsonPath)) {
+          const packageJson = JSON.parse(
+            fs.readFileSync(packageJsonPath, 'utf8')
+          );
+
+          packageJsonName = packageJson.name || 'unknown';
+        }
+      } catch {}
+
+      const ips = Object.values(os.networkInterfaces())
+        .flat()
+        .filter((iface) => iface && !iface.internal && iface.family === 'IPv4')
+        .map((iface) => iface.address)
+        .join('_');
+
+      return `${host}_${packageJsonName}_${ips || 'noip'}`;
+    }
+
+    return host;
+  } catch {
+    return process.env.MACHINE_ID || os.hostname() || 'unknown';
+  }
+}
 
 function loadMongoose() {
   if (mongoose) return mongoose;
 
   mongoose = require('mongoose');
 
-  // Store one monthly row per month.
-  const CostHistorySchema = new mongoose.Schema(
+  const schema = new mongoose.Schema(
     {
-      month: { type: String, required: true, unique: true },
-      accumulatedMemoryMinutes: { type: Number, default: 0 },
-      accumulatedCpuMinutes: { type: Number, default: 0 },
-      accumulatedEgressBytes: { type: Number, default: 0 },
-      lastTxBytes: { type: Number, default: 0 },
-      lastMeasurementTime: { type: Date, default: Date.now },
-      memoryCost: { type: Number, default: 0 },
-      cpuCost: { type: Number, default: 0 },
-      egressCost: { type: Number, default: 0 },
-      totalCost: { type: Number, default: 0 },
+      month: {
+        type: String,
+        required: true,
+      },
+
+      projectName: {
+        type: String,
+        required: true,
+        default: 'unknown',
+      },
+
+      accumulatedMemoryMinutes: {
+        type: Number,
+        default: 0,
+      },
+
+      accumulatedCpuMinutes: {
+        type: Number,
+        default: 0,
+      },
+
+      accumulatedEgressBytes: {
+        type: Number,
+        default: 0,
+      },
+
+      lastTxBytes: {
+        type: Number,
+        default: 0,
+      },
+
+      lastMeasurementTime: {
+        type: Date,
+        default: Date.now,
+      },
+
+      memoryCost: {
+        type: Number,
+        default: 0,
+      },
+
+      cpuCost: {
+        type: Number,
+        default: 0,
+      },
+
+      egressCost: {
+        type: Number,
+        default: 0,
+      },
+
+      totalCost: {
+        type: Number,
+        default: 0,
+      },
     },
-    { timestamps: true },
+    {
+      timestamps: true,
+    }
   );
 
-  CostHistory = mongoose.models.CostHistory || mongoose.model('CostHistory', CostHistorySchema);
+  schema.index(
+    {
+      month: 1,
+      projectName: 1,
+    },
+    {
+      unique: true,
+    }
+  );
+
+  CostHistory =
+    mongoose.models.CostHistory ||
+    mongoose.model('CostHistory', schema);
+
   return mongoose;
 }
 
@@ -97,52 +187,63 @@ async function connectToMongo() {
   if (!MONGODB_URI) return false;
 
   const lib = loadMongoose();
-  if (lib.connection.readyState >= 1) return true;
 
-  // Force the target database name while preserving query parameters.
-  let targetUri = MONGODB_URI;
-  try {
-    const url = new URL(MONGODB_URI);
-    url.pathname = `/${TARGET_DB_NAME}`;
-    targetUri = url.toString();
-  } catch {
-    const base = MONGODB_URI.split('?')[0].replace(/\/+$/, '');
-    const query = MONGODB_URI.split('?')[1] || 'retryWrites=true&w=majority';
-    targetUri = `${base}/${TARGET_DB_NAME}?${query}`;
+  if (lib.connection.readyState >= 1) {
+    return true;
   }
 
-  await lib.connect(targetUri);
+  let uri = MONGODB_URI;
+
+  try {
+    const u = new URL(MONGODB_URI);
+    u.pathname = `/${TARGET_DB}`;
+    uri = u.toString();
+  } catch {
+    const [base, qs] = MONGODB_URI.split('?');
+
+    uri =
+      `${base.replace(/\/+$/, '')}/${TARGET_DB}` +
+      `?${qs || 'retryWrites=true&w=majority'}`;
+  }
+
+  await lib.connect(uri);
+
   return true;
 }
 
-function toMB(bytes) {
-  return (bytes / 1024 / 1024).toFixed(2);
-}
+async function migrateCostHistoryIndexes() {
+  if (!mongoose?.connection?.db) return;
 
-function toGB(bytes) {
-  return (bytes / 1024 / 1024 / 1024).toFixed(2);
-}
-
-function readTailLines(filePath, count = 5) {
   try {
-    if (!fs.existsSync(filePath)) return [];
-    const lines = fs.readFileSync(filePath, 'utf8').trim().split(/\r?\n/);
-    return lines.slice(-count).filter(Boolean);
-  } catch {
-    return [];
+    const collection = mongoose.connection.db.collection('costhistories');
+    const indexes = await collection.indexes();
+
+    const hasOldMonthIndex = indexes.some((idx) => idx.name === 'month_1');
+
+    if (hasOldMonthIndex) {
+      console.log('[RAM API] Dropping obsolete unique index month_1...');
+      await collection.dropIndex('month_1');
+      console.log('[RAM API] Dropped obsolete unique index month_1');
+    }
+  } catch (err) {
+    console.warn('[RAM API] Failed to check/drop old index:', err.message);
   }
 }
 
-function safeExec(command) {
+const toMB = (bytes) => (bytes / 1024 / 1024).toFixed(2);
+const toGB = (bytes) => (bytes / 1024 / 1024 / 1024).toFixed(2);
+
+function safeExec(cmd) {
   try {
-    return execSync(command, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+    return execSync(cmd, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).toString().trim();
   } catch {
     return '';
   }
 }
 
 async function measureCpuPercent() {
-  // Sample twice so we can estimate CPU usage over a short interval.
   const startCpu = os.cpus();
   const startUsage = process.cpuUsage();
   const hrStart = process.hrtime();
@@ -153,63 +254,132 @@ async function measureCpuPercent() {
   const endUsage = process.cpuUsage(startUsage);
   const hrEnd = process.hrtime();
 
-  const elapsedNs = hrEnd[0] * 1e9 + hrEnd[1] - (hrStart[0] * 1e9 + hrStart[1]);
-  const elapsedMs = elapsedNs / 1e6;
-  const userMs = endUsage.user / 1000;
-  const systemMs = endUsage.system / 1000;
-  const cpuPercentNode = elapsedMs > 0 ? (((userMs + systemMs) / elapsedMs) * 100).toFixed(2) : '0.00';
+  const elapTimeMS =
+    (hrEnd[0] * 1e9 +
+      hrEnd[1] -
+      (hrStart[0] * 1e9 + hrStart[1])) /
+    1e6;
+
+  const elapUserMS = endUsage.user / 1000;
+  const elapSystMS = endUsage.system / 1000;
+
+  const cpuPercentNode =
+    elapTimeMS > 0
+      ? (((elapUserMS + elapSystMS) / elapTimeMS) * 100).toFixed(2)
+      : '0.00';
 
   let totalDiff = 0;
   let idleDiff = 0;
+
   for (let i = 0; i < startCpu.length; i++) {
-    const start = startCpu[i].times;
-    const end = endCpu[i].times;
-    const startTotal = start.user + start.nice + start.sys + start.idle + start.irq;
-    const endTotal = end.user + end.nice + end.sys + end.idle + end.irq;
-    totalDiff += endTotal - startTotal;
-    idleDiff += end.idle - start.idle;
+    const s = startCpu[i].times;
+    const e = endCpu[i].times;
+
+    totalDiff +=
+      e.user +
+      e.nice +
+      e.sys +
+      e.idle +
+      e.irq -
+      (s.user + s.nice + s.sys + s.idle + s.irq);
+
+    idleDiff += e.idle - s.idle;
   }
 
-  const cpuPercentSystem = totalDiff > 0 ? ((1 - idleDiff / totalDiff) * 100).toFixed(2) : '0.00';
+  const cpuPercentSystem =
+    totalDiff > 0
+      ? ((1 - idleDiff / totalDiff) * 100).toFixed(2)
+      : '0.00';
 
   return {
     nodeProcess: `${cpuPercentNode}%`,
     systemTotal: `${cpuPercentSystem}%`,
     coresCount: startCpu.length,
-    loadAverage: os.loadavg().map((value) => value.toFixed(2)),
+    loadAverage: os.loadavg().map((v) => v.toFixed(2)),
   };
 }
 
 async function buildMonitorStats() {
-  const totalMemBytes = os.totalmem();
-  const freeMemBytes = os.freemem();
-  const usedMemBytes = totalMemBytes - freeMemBytes;
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+
   const cpu = await measureCpuPercent();
-  const rssBytes = process.memoryUsage().rss;
+  const mem = process.memoryUsage();
+
+  const projectName = getProjectName();
 
   const stats = {
     cpu,
+
     os: {
-      total: `${toGB(totalMemBytes)} GB`,
-      free: `${toGB(freeMemBytes)} GB`,
-      used: `${toGB(usedMemBytes)} GB`,
-      usedPercentage: `${((usedMemBytes / totalMemBytes) * 100).toFixed(2)}%`,
+      total: `${toGB(totalMem)} GB`,
+      free: `${toGB(freeMem)} GB`,
+      used: `${toGB(usedMem)} GB`,
+      usedPercentage: `${((usedMem / totalMem) * 100).toFixed(2)}%`,
     },
+
     node: {
-      heapTotal: `${toMB(process.memoryUsage().heapTotal)} MB`,
-      heapUsed: `${toMB(process.memoryUsage().heapUsed)} MB`,
-      rss: `${toMB(rssBytes)} MB`,
+      heapTotal: `${toMB(mem.heapTotal)} MB`,
+      heapUsed: `${toMB(mem.heapUsed)} MB`,
+      rss: `${toMB(mem.rss)} MB`,
     },
+
     timestamp: new Date().toISOString(),
   };
 
-  // If the `ram` command exists, include it as a quick human-readable mirror.
-  const ramOutput = safeExec('ram');
-  if (ramOutput) {
-    stats.ramCommandOutput = ramOutput;
+  if (process.platform === 'linux') {
+    try {
+      const freeOutput = safeExec('free -h');
+      if (freeOutput) {
+        stats.freeCommandOutput = freeOutput;
+      }
+
+      const ps = safeExec('ps aux --sort=-%mem | head -n 6');
+      if (ps) {
+        stats.topProcesses = ps.split('\n');
+      }
+    } catch (e) {
+      stats.diagnosticError = String(e);
+    }
+
+    const logPaths = [
+      '/tmp/mem_guard.log',
+      '/var/log/mem_guard.log',
+      './mem_guard.log',
+    ];
+
+    for (const logPath of logPaths) {
+      const logTail = safeExec(`tail -n 5 ${logPath} 2>/dev/null`);
+
+      if (logTail) {
+        stats.memGuardLog = {
+          path: logPath,
+          lines: logTail.split('\n'),
+        };
+
+        break;
+      }
+    }
   }
 
-  return { stats, rssBytes };
+  stats.identity = {
+    name: projectName,
+    machineId: projectName,
+    hostname: os.hostname(),
+    platform: os.platform(),
+    arch: os.arch(),
+
+    ips: Object.values(os.networkInterfaces())
+      .flat()
+      .filter((iface) => iface && !iface.internal && iface.family === 'IPv4')
+      .map((iface) => iface.address),
+  };
+
+  return {
+    stats,
+    rssBytes: mem.rss,
+  };
 }
 
 async function updateCostHistory(rssBytes) {
@@ -221,157 +391,208 @@ async function updateCostHistory(rssBytes) {
     };
   }
 
-  await connectToMongo();
+  try {
+    await connectToMongo();
+    await migrateCostHistoryIndexes();
 
-  const now = new Date();
-  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const now = new Date();
 
-  let currentTxBytes = 0;
-  if (process.platform === 'linux') {
-    try {
-      const txPath = '/sys/class/net/eth0/statistics/tx_bytes';
-      if (fs.existsSync(txPath)) {
-        currentTxBytes = parseInt(fs.readFileSync(txPath, 'utf8').trim(), 10);
-      }
-    } catch {
-      currentTxBytes = 0;
+    const currentMonthStr =
+      `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    const projectName = getProjectName();
+
+    let currentTxBytes = 0;
+
+    if (process.platform === 'linux') {
+      try {
+        const txPath = '/sys/class/net/eth0/statistics/tx_bytes';
+
+        if (fs.existsSync(txPath)) {
+          currentTxBytes = parseInt(
+            fs.readFileSync(txPath, 'utf8').trim(),
+            10
+          );
+        }
+      } catch {}
     }
-  }
 
-  let record = await CostHistory.findOne({ month: currentMonthStr });
-  if (!record) {
-    record = new CostHistory({
+    let record = await CostHistory.findOne({
       month: currentMonthStr,
-      lastMeasurementTime: now,
-      lastTxBytes: currentTxBytes,
+      projectName,
     });
-  }
 
-  const lastTime = new Date(record.lastMeasurementTime);
-  const minutesElapsed = (now.getTime() - lastTime.getTime()) / 60000;
+    if (!record) {
+      record = new CostHistory({
+        month: currentMonthStr,
+        projectName,
+        lastMeasurementTime: now,
+        lastTxBytes: currentTxBytes,
+      });
 
-  // Avoid writing on every single request; keep the update cadence relaxed.
-  if (minutesElapsed > 0.01) {
-    const currentRssGB = rssBytes / (1024 * 1024 * 1024);
-    const deltaMemoryMinutes = currentRssGB * minutesElapsed;
-
-    // Treat the container as a 0.1 vCPU baseline to approximate the old Render model.
-    const allocatedCpu = 0.1;
-    const deltaCpuMinutes = allocatedCpu * minutesElapsed;
-
-    let deltaEgressBytes = 0;
-    if (currentTxBytes > 0 && record.lastTxBytes > 0 && currentTxBytes >= record.lastTxBytes) {
-      deltaEgressBytes = currentTxBytes - record.lastTxBytes;
+      await record.save();
     }
 
-    record.accumulatedMemoryMinutes += deltaMemoryMinutes;
-    record.accumulatedCpuMinutes += deltaCpuMinutes;
-    record.accumulatedEgressBytes += deltaEgressBytes;
-    record.lastTxBytes = currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
-    record.lastMeasurementTime = now;
+    const minutesElapsed =
+      (now.getTime() -
+        new Date(record.lastMeasurementTime).getTime()) /
+      60000;
 
-    // Keep the same pricing shape as the source snippet, including the x2 factor.
-    const MEMORY_PRICE_PER_GB_MIN_X2 = 0.000231 * 2;
-    const CPU_PRICE_PER_VCPU_MIN_X2 = 0.000463 * 2;
-    const EGRESS_PRICE_PER_GB_X2 = 0.05 * 2;
+    if (minutesElapsed > 0.01) {
+      const currentRssGB = rssBytes / 1024 / 1024 / 1024;
 
-    record.memoryCost = record.accumulatedMemoryMinutes * MEMORY_PRICE_PER_GB_MIN_X2;
-    record.cpuCost = record.accumulatedCpuMinutes * CPU_PRICE_PER_VCPU_MIN_X2;
-    record.egressCost = (record.accumulatedEgressBytes / (1024 * 1024 * 1024)) * EGRESS_PRICE_PER_GB_X2;
-    record.totalCost = record.memoryCost + record.cpuCost + record.egressCost;
+      record.accumulatedMemoryMinutes += currentRssGB * minutesElapsed;
 
-    await record.save();
+      const allocatedCpu = Number(process.env.ALLOCATED_CPU || 0.1);
+      record.accumulatedCpuMinutes += allocatedCpu * minutesElapsed;
+
+      let deltaEgressBytes = 0;
+
+      if (
+        currentTxBytes > 0 &&
+        record.lastTxBytes > 0 &&
+        currentTxBytes >= record.lastTxBytes
+      ) {
+        deltaEgressBytes = currentTxBytes - record.lastTxBytes;
+      }
+
+      record.accumulatedEgressBytes += deltaEgressBytes;
+      record.lastTxBytes =
+        currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
+      record.lastMeasurementTime = now;
+
+      const MEMORY_PRICE_PER_GB_MIN_X2 = 0.000231 * 2;
+      const CPU_PRICE_PER_VCPU_MIN_X2 = 0.000463 * 2;
+      const EGRESS_PRICE_PER_GB_X2 = 0.05 * 2;
+
+      record.memoryCost =
+        record.accumulatedMemoryMinutes * MEMORY_PRICE_PER_GB_MIN_X2;
+
+      record.cpuCost =
+        record.accumulatedCpuMinutes * CPU_PRICE_PER_VCPU_MIN_X2;
+
+      record.egressCost =
+        (record.accumulatedEgressBytes / 1024 / 1024 / 1024) *
+        EGRESS_PRICE_PER_GB_X2;
+
+      record.totalCost =
+        record.memoryCost +
+        record.cpuCost +
+        record.egressCost;
+
+      await record.save();
+    }
+
+    const allocatedCpu = Number(process.env.ALLOCATED_CPU || 0.1);
+    const activeMinutes =
+      allocatedCpu > 0
+        ? record.accumulatedCpuMinutes / allocatedCpu
+        : 0;
+
+    const d = Math.floor(activeMinutes / 1440);
+    const h = Math.floor((activeMinutes % 1440) / 60);
+    const m = Math.floor(activeMinutes % 60);
+
+    const currentCost = {
+      projectName: record.projectName,
+      machineId: record.projectName,
+      month: record.month,
+
+      runningDuration: `${d}d ${h}h ${m}m`,
+      runningDays: `${(activeMinutes / 1440).toFixed(2)} days`,
+
+      accumulatedMemoryGBMinutes:
+        record.accumulatedMemoryMinutes.toFixed(2),
+
+      accumulatedCpuVCPUMinutes:
+        record.accumulatedCpuMinutes.toFixed(2),
+
+      accumulatedEgressGB:
+        (record.accumulatedEgressBytes / 1024 / 1024 / 1024).toFixed(4),
+
+      memoryCost: `$${record.memoryCost.toFixed(4)}`,
+      cpuCost: `$${record.cpuCost.toFixed(4)}`,
+      egressCost: `$${record.egressCost.toFixed(4)}`,
+      totalCost: `$${record.totalCost.toFixed(4)}`,
+    };
+
+    const history = await CostHistory
+      .find({
+        projectName,
+      })
+      .sort({
+        month: -1,
+      })
+      .limit(5);
+
+    const last5MonthsHistory = history.map((hist) => {
+      const histActiveMinutes =
+        allocatedCpu > 0
+          ? hist.accumulatedCpuMinutes / allocatedCpu
+          : 0;
+
+      const hd = Math.floor(histActiveMinutes / 1440);
+      const hh = Math.floor((histActiveMinutes % 1440) / 60);
+      const hm = Math.floor(histActiveMinutes % 60);
+
+      return {
+        projectName: hist.projectName,
+        machineId: hist.projectName,
+        month: hist.month,
+
+        runningDuration: `${hd}d ${hh}h ${hm}m`,
+
+        memoryCost: `$${hist.memoryCost.toFixed(4)}`,
+        cpuCost: `$${hist.cpuCost.toFixed(4)}`,
+        egressCost: `$${hist.egressCost.toFixed(4)}`,
+        totalCost: `$${hist.totalCost.toFixed(4)}`,
+      };
+    });
+
+    return {
+      currentMonth: currentCost,
+      last5MonthsHistory,
+    };
+  } catch (err) {
+    return {
+      currentMonth: null,
+      last5MonthsHistory: [],
+      error: err.message,
+    };
   }
-
-  const currentCost = {
-    month: record.month,
-    accumulatedMemoryGBMinutes: record.accumulatedMemoryMinutes.toFixed(2),
-    accumulatedCpuVCPUMinutes: record.accumulatedCpuMinutes.toFixed(2),
-    accumulatedEgressGB: (record.accumulatedEgressBytes / (1024 * 1024 * 1024)).toFixed(4),
-    memoryCost: `$${record.memoryCost.toFixed(4)}`,
-    cpuCost: `$${record.cpuCost.toFixed(4)}`,
-    egressCost: `$${record.egressCost.toFixed(4)}`,
-    totalCost: `$${record.totalCost.toFixed(4)}`,
-  };
-
-  const history = await CostHistory.find({}).sort({ month: -1 }).limit(5);
-  const last5MonthsHistory = history.map((item) => ({
-    month: item.month,
-    memoryCost: `$${item.memoryCost.toFixed(4)}`,
-    cpuCost: `$${item.cpuCost.toFixed(4)}`,
-    egressCost: `$${item.egressCost.toFixed(4)}`,
-    totalCost: `$${item.totalCost.toFixed(4)}`,
-  }));
-
-  return {
-    currentMonth: currentCost,
-    last5MonthsHistory,
-  };
 }
 
-function sendJson(res, statusCode, payload) {
-  res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+function sendJson(res, code, payload) {
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+  });
+
   res.end(JSON.stringify(payload, null, 2));
 }
 
-function sendText(res, statusCode, text) {
-  res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
+function sendText(res, code, text) {
+  res.writeHead(code, {
+    'Content-Type': 'text/plain; charset=utf-8',
+  });
+
   res.end(text);
 }
 
-// Start n8n as a child process on localhost only.
-// This keeps the public wrapper in full control of the exposed port.
-function startN8n() {
-  const env = {
-    ...process.env,
-    N8N_PORT: String(INTERNAL_N8N_PORT),
-    N8N_LISTEN_ADDRESS: '127.0.0.1',
-  };
-
-  const child = spawn('n8n', ['start'], {
-    stdio: 'inherit',
-    env,
-  });
-
-  child.on('exit', (code, signal) => {
-    if (signal) process.exit(1);
-    process.exit(code ?? 0);
-  });
-
-  return child;
-}
-
-function waitForPort(host, port, timeoutMs = 120000) {
-  const net = require('node:net');
-  const startedAt = Date.now();
-
-  return new Promise((resolve, reject) => {
-    const probe = () => {
-      const socket = net.connect(port, host);
-      socket.once('connect', () => {
-        socket.end();
-        resolve(true);
-      });
-      socket.once('error', () => {
-        socket.destroy();
-        if (Date.now() - startedAt >= timeoutMs) {
-          reject(new Error(`Timed out waiting for ${host}:${port}`));
-          return;
-        }
-        setTimeout(probe, 1000);
-      });
-    };
-
-    probe();
-  });
-}
-
 async function handleRamRequest(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
-  const token = url.searchParams.get('token') || req.headers['x-ram-token'];
+  const url = new URL(
+    req.url,
+    `http://${req.headers.host || '127.0.0.1'}`
+  );
+
+  const token =
+    url.searchParams.get('token') ||
+    req.headers['x-ram-token'];
 
   if (RAM_TOKEN && token !== RAM_TOKEN) {
-    sendJson(res, 401, { error: 'Unauthorized' });
+    sendJson(res, 401, {
+      error: 'Unauthorized',
+    });
+
     return;
   }
 
@@ -379,13 +600,117 @@ async function handleRamRequest(req, res) {
   const projectCost = await updateCostHistory(rssBytes);
 
   sendJson(res, 200, {
-    ...stats,
-    projectCost,
+    identity: stats.identity,
+    cpu: stats.cpu,
+    os: stats.os,
+    node: stats.node,
+    timestamp: stats.timestamp,
+
+    ...(stats.freeCommandOutput
+      ? {
+          freeCommandOutput: stats.freeCommandOutput,
+        }
+      : {}),
+
+    ...(stats.topProcesses
+      ? {
+          topProcesses: stats.topProcesses,
+        }
+      : {}),
+
+    ...(stats.memGuardLog
+      ? {
+          memGuardLog: stats.memGuardLog,
+        }
+      : {}),
+
+    ...(stats.diagnosticError
+      ? {
+          diagnosticError: stats.diagnosticError,
+        }
+      : {}),
+
+    projectCost: {
+      currentMonth: projectCost.currentMonth,
+      last5MonthsHistory: projectCost.last5MonthsHistory,
+
+      ...(projectCost.error
+        ? {
+            error: projectCost.error,
+          }
+        : {}),
+
+      ...(projectCost.disabled
+        ? {
+            disabled: projectCost.disabled,
+          }
+        : {}),
+    },
   });
 }
 
-// This proxy keeps one public URL while forwarding everything except /ram to n8n.
+function startN8n() {
+  const n8nEnv = {
+    ...process.env,
+    N8N_PORT: String(INTERNAL_N8N_PORT),
+    N8N_LISTEN_ADDRESS: '127.0.0.1',
+  };
+
+  if (!n8nEnv.WEBHOOK_URL && n8nEnv.RENDER_EXTERNAL_URL) {
+    n8nEnv.WEBHOOK_URL = n8nEnv.RENDER_EXTERNAL_URL;
+  }
+
+  const child = spawn('n8n', ['start'], {
+    stdio: 'inherit',
+
+    env: n8nEnv,
+  });
+
+  child.on('exit', (code, signal) => {
+    process.exit(signal ? 1 : code ?? 0);
+  });
+
+  return child;
+}
+
+function waitForPort(port, host, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+
+    function attempt() {
+      const sock = new net.Socket();
+
+      sock.setTimeout(1000);
+
+      sock.on('connect', () => {
+        sock.destroy();
+        resolve();
+      });
+
+      sock.on('error', () => {
+        sock.destroy();
+
+        if (Date.now() - start >= timeoutMs) {
+          reject(new Error(`Timeout waiting for ${host}:${port}`));
+        } else {
+          setTimeout(attempt, 500);
+        }
+      });
+
+      sock.on('timeout', () => {
+        sock.destroy();
+        setTimeout(attempt, 500);
+      });
+
+      sock.connect(port, host);
+    }
+
+    attempt();
+  });
+}
+
 let n8nReady = false;
+const pendingQueue = [];
 
 const proxy = httpProxy.createProxyServer({
   target: `http://127.0.0.1:${INTERNAL_N8N_PORT}`,
@@ -394,13 +719,55 @@ const proxy = httpProxy.createProxyServer({
 });
 
 proxy.on('error', (err, req, res) => {
+  console.error(`[proxy] ${err.message}`);
+
   if (res && !res.headersSent) {
     sendText(res, 502, `Proxy error: ${err.message}`);
   }
 });
 
+proxy.on('proxyRes', (proxyRes) => {
+  proxyRes.headers['x-content-type-options'] = 'nosniff';
+  proxyRes.headers['x-frame-options'] = 'SAMEORIGIN';
+  proxyRes.headers['x-xss-protection'] = '1; mode=block';
+  proxyRes.headers['referrer-policy'] = 'strict-origin-when-cross-origin';
+
+  proxyRes.headers['cache-control'] =
+    proxyRes.headers['cache-control'] || 'no-store';
+
+  proxyRes.headers['strict-transport-security'] =
+    'max-age=31536000; includeSubDomains';
+
+  proxyRes.headers['content-security-policy'] = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    "connect-src 'self' wss: ws: https:",
+    "frame-ancestors 'self'",
+  ].join('; ');
+
+  delete proxyRes.headers['x-powered-by'];
+  delete proxyRes.headers['server'];
+});
+
+function applySecurityHeaders(res) {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'SAMEORIGIN');
+  res.setHeader('x-xss-protection', '1; mode=block');
+  res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
+  res.setHeader(
+    'strict-transport-security',
+    'max-age=31536000; includeSubDomains'
+  );
+}
+
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+  const url = new URL(
+    req.url,
+    `http://${req.headers.host || '127.0.0.1'}`
+  );
 
   if (url.pathname === '/ram') {
     await handleRamRequest(req, res);
@@ -408,7 +775,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (!n8nReady) {
-    sendText(res, 503, 'n8n is starting');
+    applySecurityHeaders(res);
+
+    const timer = setTimeout(() => {
+      if (!res.writableEnded) {
+        sendText(res, 503, 'n8n is starting, please retry');
+      }
+    }, 30000);
+
+    pendingQueue.push({
+      req,
+      res,
+      timer,
+    });
+
     return;
   }
 
@@ -416,13 +796,17 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on('upgrade', (req, socket, head) => {
+  if (!n8nReady) {
+    socket.destroy();
+    return;
+  }
+
   proxy.ws(req, socket, head);
 });
 
-// Clean shutdown so Render or Docker stops do not leave a zombie child process behind.
 let n8nChild = null;
 
-function shutdown(exitCode) {
+function shutdown(code) {
   try {
     server.close();
   } catch {}
@@ -431,37 +815,50 @@ function shutdown(exitCode) {
     n8nChild.kill('SIGTERM');
   }
 
-  process.exit(exitCode);
+  process.exit(code);
 }
 
 process.on('SIGTERM', () => shutdown(0));
 process.on('SIGINT', () => shutdown(0));
 
-// Bring everything up in the right order:
-// 1) n8n backend
-// 2) public proxy + /ram endpoint
-n8nChild = startN8n();
-waitForPort('127.0.0.1', INTERNAL_N8N_PORT)
-  .then(() => {
-    n8nReady = true;
+(async () => {
+  await new Promise((resolve) => {
     server.listen(PUBLIC_PORT, '0.0.0.0', () => {
-      console.log(`Public wrapper listening on 0.0.0.0:${PUBLIC_PORT}`);
+      console.log(`[wrapper] Port ${PUBLIC_PORT} open — waiting for n8n...`);
+      resolve();
     });
-  })
-  .catch((error) => {
-    console.error(error.message);
-    process.exit(1);
   });
+
+  n8nChild = startN8n();
+
+  try {
+    await waitForPort(INTERNAL_N8N_PORT, '127.0.0.1');
+  } catch (err) {
+    console.error(`[wrapper] ${err.message}`);
+    shutdown(1);
+    return;
+  }
+
+  console.log('[wrapper] n8n ready — serving traffic');
+
+  n8nReady = true;
+
+  while (pendingQueue.length) {
+    const { req, res, timer } = pendingQueue.shift();
+
+    clearTimeout(timer);
+
+    if (!res.writableEnded) {
+      proxy.web(req, res);
+    }
+  }
+})();
 EOF
 
-# Runtime files are owned by the non-root n8n user so the container can run safely.
 RUN chown -R node:node /app /home/node
 
-# Drop privileges before runtime.
 USER node
 
-# Only one public port exists.
 EXPOSE 8080
 
-# The wrapper starts n8n internally and exposes the single public port.
 ENTRYPOINT ["node", "/app/server.js"]
