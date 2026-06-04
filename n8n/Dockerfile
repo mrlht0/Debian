@@ -233,6 +233,53 @@ async function migrateCostHistoryIndexes() {
 const toMB = (bytes) => (bytes / 1024 / 1024).toFixed(2);
 const toGB = (bytes) => (bytes / 1024 / 1024 / 1024).toFixed(2);
 
+// Railway pricing x2.
+// Memory/CPU are calculated per minute; network is calculated per outbound GB.
+const RAILWAY_X2_PRICING = {
+  memoryPerGBMinute: 0.000231 * 2,
+  cpuPerVCPUMinute: 0.000463 * 2,
+  egressPerGB: 0.05 * 2,
+};
+
+function money(value) {
+  return `$${Number(value || 0).toFixed(4)}`;
+}
+
+function bytesToGBNumber(bytes) {
+  return Number(bytes || 0) / 1024 / 1024 / 1024;
+}
+
+function buildRailwayX2Cost(record) {
+  const memoryGBMinutes = Number(record.accumulatedMemoryMinutes || 0);
+  const cpuVCPUMinutes = Number(record.accumulatedCpuMinutes || 0);
+  const egressGB = bytesToGBNumber(record.accumulatedEgressBytes);
+
+  const memoryCost = memoryGBMinutes * RAILWAY_X2_PRICING.memoryPerGBMinute;
+  const cpuCost = cpuVCPUMinutes * RAILWAY_X2_PRICING.cpuPerVCPUMinute;
+  const networkCost = egressGB * RAILWAY_X2_PRICING.egressPerGB;
+  const totalCost = memoryCost + cpuCost + networkCost;
+
+  return {
+    pricing: {
+      provider: 'Railway',
+      multiplier: 'x2',
+      memoryPerGBMinute: `$${RAILWAY_X2_PRICING.memoryPerGBMinute}`,
+      cpuPerVCPUMinute: `$${RAILWAY_X2_PRICING.cpuPerVCPUMinute}`,
+      egressPerGB: `$${RAILWAY_X2_PRICING.egressPerGB}`,
+    },
+    usage: {
+      memoryGBMinutes: memoryGBMinutes.toFixed(2),
+      cpuVCPUMinutes: cpuVCPUMinutes.toFixed(2),
+      egressGB: egressGB.toFixed(4),
+    },
+    memoryCost: money(memoryCost),
+    cpuCost: money(cpuCost),
+    networkCost: money(networkCost),
+    egressCost: money(networkCost),
+    totalCost: money(totalCost),
+  };
+}
+
 function safeExec(cmd) {
   try {
     return execSync(cmd, {
@@ -461,24 +508,23 @@ async function updateCostHistory(rssBytes) {
         currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
       record.lastMeasurementTime = now;
 
-      const MEMORY_PRICE_PER_GB_MIN_X2 = 0.000231 * 2;
-      const CPU_PRICE_PER_VCPU_MIN_X2 = 0.000463 * 2;
-      const EGRESS_PRICE_PER_GB_X2 = 0.05 * 2;
+      const railwayX2Cost = buildRailwayX2Cost(record);
 
-      record.memoryCost =
-        record.accumulatedMemoryMinutes * MEMORY_PRICE_PER_GB_MIN_X2;
+      record.memoryCost = Number(
+        railwayX2Cost.memoryCost.replace(/[^0-9.]/g, '')
+      );
 
-      record.cpuCost =
-        record.accumulatedCpuMinutes * CPU_PRICE_PER_VCPU_MIN_X2;
+      record.cpuCost = Number(
+        railwayX2Cost.cpuCost.replace(/[^0-9.]/g, '')
+      );
 
-      record.egressCost =
-        (record.accumulatedEgressBytes / 1024 / 1024 / 1024) *
-        EGRESS_PRICE_PER_GB_X2;
+      record.egressCost = Number(
+        railwayX2Cost.egressCost.replace(/[^0-9.]/g, '')
+      );
 
-      record.totalCost =
-        record.memoryCost +
-        record.cpuCost +
-        record.egressCost;
+      record.totalCost = Number(
+        railwayX2Cost.totalCost.replace(/[^0-9.]/g, '')
+      );
 
       await record.save();
     }
@@ -501,6 +547,9 @@ async function updateCostHistory(rssBytes) {
       runningDuration: `${d}d ${h}h ${m}m`,
       runningDays: `${(activeMinutes / 1440).toFixed(2)} days`,
 
+      updatedAt: new Date(record.lastMeasurementTime).toISOString(),
+      lastMeasurementTime: new Date(record.lastMeasurementTime).toISOString(),
+
       accumulatedMemoryGBMinutes:
         record.accumulatedMemoryMinutes.toFixed(2),
 
@@ -510,10 +559,13 @@ async function updateCostHistory(rssBytes) {
       accumulatedEgressGB:
         (record.accumulatedEgressBytes / 1024 / 1024 / 1024).toFixed(4),
 
-      memoryCost: `$${record.memoryCost.toFixed(4)}`,
-      cpuCost: `$${record.cpuCost.toFixed(4)}`,
-      egressCost: `$${record.egressCost.toFixed(4)}`,
-      totalCost: `$${record.totalCost.toFixed(4)}`,
+      memoryCost: money(record.memoryCost),
+      cpuCost: money(record.cpuCost),
+      egressCost: money(record.egressCost),
+      networkCost: money(record.egressCost),
+      totalCost: money(record.totalCost),
+
+      railwayX2Cost: buildRailwayX2Cost(record),
     };
 
     const history = await CostHistory
@@ -542,10 +594,13 @@ async function updateCostHistory(rssBytes) {
 
         runningDuration: `${hd}d ${hh}h ${hm}m`,
 
-        memoryCost: `$${hist.memoryCost.toFixed(4)}`,
-        cpuCost: `$${hist.cpuCost.toFixed(4)}`,
-        egressCost: `$${hist.egressCost.toFixed(4)}`,
-        totalCost: `$${hist.totalCost.toFixed(4)}`,
+        memoryCost: money(hist.memoryCost),
+        cpuCost: money(hist.cpuCost),
+        egressCost: money(hist.egressCost),
+        networkCost: money(hist.egressCost),
+        totalCost: money(hist.totalCost),
+
+        railwayX2Cost: buildRailwayX2Cost(hist),
       };
     });
 
@@ -633,6 +688,13 @@ async function handleRamRequest(req, res) {
     projectCost: {
       currentMonth: projectCost.currentMonth,
       last5MonthsHistory: projectCost.last5MonthsHistory,
+      pricing: {
+        provider: 'Railway',
+        multiplier: 'x2',
+        memoryPerGBMinute: `$${RAILWAY_X2_PRICING.memoryPerGBMinute}`,
+        cpuPerVCPUMinute: `$${RAILWAY_X2_PRICING.cpuPerVCPUMinute}`,
+        egressPerGB: `$${RAILWAY_X2_PRICING.egressPerGB}`,
+      },
 
       ...(projectCost.error
         ? {
