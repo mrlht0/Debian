@@ -711,16 +711,56 @@ async function handleRamRequest(req, res) {
   });
 }
 
+function normalizePublicBaseUrl(raw) {
+  if (!raw) return '';
+
+  let value = String(raw).trim();
+  if (!value) return '';
+
+  if (!/^https?:\/\//i.test(value)) {
+    value = `https://${value}`;
+  }
+
+  return value.replace(/\/+$/, '');
+}
+
 function startN8n() {
+  const forwardedPublicUrl =
+    process.env.PUBLIC_DOMAIN ||
+    process.env.PUBLIC_URL ||
+    process.env.N8N_PUBLIC_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    process.env.RAILWAY_PUBLIC_DOMAIN ||
+    process.env.WEBHOOK_URL ||
+    process.env.N8N_EDITOR_BASE_URL ||
+    '';
+
+  const publicBaseUrl = normalizePublicBaseUrl(forwardedPublicUrl);
+  let publicHost = '';
+  let publicProtocol = 'https';
+
+  if (publicBaseUrl) {
+    try {
+      const parsed = new URL(publicBaseUrl);
+      publicHost = parsed.host;
+      publicProtocol = parsed.protocol.replace(':', '') || 'https';
+    } catch {}
+  }
+
   const n8nEnv = {
     ...process.env,
     N8N_PORT: String(INTERNAL_N8N_PORT),
     N8N_LISTEN_ADDRESS: '127.0.0.1',
-  };
 
-  if (!n8nEnv.WEBHOOK_URL && n8nEnv.RENDER_EXTERNAL_URL) {
-    n8nEnv.WEBHOOK_URL = n8nEnv.RENDER_EXTERNAL_URL;
-  }
+    ...(publicBaseUrl
+      ? {
+          WEBHOOK_URL: `${publicBaseUrl}/`,
+          N8N_EDITOR_BASE_URL: publicBaseUrl,
+          N8N_HOST: publicHost,
+          N8N_PROTOCOL: publicProtocol,
+        }
+      : {}),
+  };
 
   const child = spawn('n8n', ['start'], {
     stdio: 'inherit',
