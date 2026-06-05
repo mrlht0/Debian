@@ -2,25 +2,26 @@
 FROM n8nio/n8n:2.22.4
 
 ENV N8N_PORT=5678 \
-    N8N_LISTEN_ADDRESS=127.0.0.1 \
-    N8N_HIRING_BANNER=false \
-    N8N_DIAGNOSTICS_ENABLED=false \
-    N8N_RUNNERS_ENABLED=false \
-    N8N_COMMUNITY_PACKAGES_ENABLED=false \
-    EXECUTIONS_PROCESS=main \
-    EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
-    EXECUTIONS_DATA_SAVE_ON_ERROR=none \
-    EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
-    NODE_FUNCTION_ALLOW_BUILTIN=* \
-    NODE_FUNCTION_ALLOW_EXTERNAL=* \
-    NODE_FUNCTION_ALLOW_EXTERNAL=playwright \
-    NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
+  N8N_LISTEN_ADDRESS=127.0.0.1 \
+  N8N_HIRING_BANNER=false \
+  N8N_DIAGNOSTICS_ENABLED=false \
+  N8N_RUNNERS_ENABLED=false \
+  N8N_COMMUNITY_PACKAGES_ENABLED=false \
+  EXECUTIONS_PROCESS=main \
+  EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+  EXECUTIONS_DATA_SAVE_ON_ERROR=none \
+  EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+  NODE_FUNCTION_ALLOW_EXTERNAL=mongodb \
+  NODE_FUNCTION_ALLOW_BUILTIN=* \
+  NODE_FUNCTION_ALLOW_EXTERNAL=* \
+  NODE_FUNCTION_ALLOW_EXTERNAL=playwright \
+  NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
 
 WORKDIR /app
 USER root
 
 RUN npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb
+  && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
