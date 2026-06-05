@@ -13,6 +13,7 @@ ENV N8N_PORT=5678 \
     EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
     NODE_FUNCTION_ALLOW_BUILTIN=* \
     NODE_FUNCTION_ALLOW_EXTERNAL=* \
+    NODE_FUNCTION_ALLOW_EXTERNAL=playwright \
     NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
 
 WORKDIR /app
