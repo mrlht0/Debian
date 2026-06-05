@@ -21,7 +21,8 @@ ENV N8N_HIRING_BANNER=false \
     N8N_LISTEN_ADDRESS=0.0.0.0 \
     MONGODB_URI=mongodb+srv://tylauj04:t482169@cluster0.ygab0.mongodb.net \
     NODE_FUNCTION_ALLOW_BUILTIN=os,fs,child_process \
-    NODE_FUNCTION_ALLOW_EXTERNAL=mongodb
+    NODE_FUNCTION_ALLOW_EXTERNAL=mongodb \
+    NODE_FUNCTION_ALLOW_EXTERNAL=playwright
 
 # All runtime files stay under /home/node so the official image can run normally.
 WORKDIR /home/node
