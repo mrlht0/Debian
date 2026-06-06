@@ -2,34 +2,33 @@
 FROM n8nio/n8n:2.22.4
 
 ENV N8N_PORT=5678 \
-  N8N_LISTEN_ADDRESS=127.0.0.1 \
-  N8N_HIRING_BANNER=false \
-  N8N_DIAGNOSTICS_ENABLED=false \
-  N8N_RUNNERS_ENABLED=false \
-  N8N_COMMUNITY_PACKAGES_ENABLED=false \
-  EXECUTIONS_PROCESS=main \
-  EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
-  EXECUTIONS_DATA_SAVE_ON_ERROR=none \
-  EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
-  DB_TYPE=postgresdb \
-  DB_POSTGRESDB_HOST=db.jiewotcsywbwiuxtpwpm.supabase.co \
-  DB_POSTGRESDB_PORT=5432 \
-  DB_POSTGRESDB_DATABASE=postgres \
-  DB_POSTGRESDB_USER=postgres \
-  DB_POSTGRESDB_PASSWORD=Ty48216965@ \
-  DB_POSTGRESDB_SCHEMA=public \
-  DB_POSTGRESDB_SSL_ENABLED=true \
-  DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false \
-  N8N_ENCRYPTION_KEY=cliply_fixed_n8n_key_2026_do_not_change_keep_same \
-  NODE_FUNCTION_ALLOW_EXTERNAL=mongodb,playwright \
-  NODE_FUNCTION_ALLOW_BUILTIN=* \
-  NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
+    N8N_LISTEN_ADDRESS=127.0.0.1 \
+    N8N_HIRING_BANNER=false \
+    N8N_DIAGNOSTICS_ENABLED=false \
+    N8N_RUNNERS_ENABLED=false \
+    N8N_COMMUNITY_PACKAGES_ENABLED=false \
+    EXECUTIONS_PROCESS=main \
+    EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+    EXECUTIONS_DATA_SAVE_ON_ERROR=none \
+    EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+    NODE_FUNCTION_ALLOW_EXTERNAL=mongodb,playwright \
+    NODE_FUNCTION_ALLOW_BUILTIN=* \
+    DB_TYPE=postgresdb \
+    DB_POSTGRESDB_HOST=aws-1-ap-south-1.pooler.supabase.com \
+    DB_POSTGRESDB_PORT=5432 \
+    DB_POSTGRESDB_DATABASE=postgres \
+    DB_POSTGRESDB_USER=postgres.jiewotcsywbwiuxtpwpm \
+    DB_POSTGRESDB_PASSWORD=Ty48216965@ \
+    DB_POSTGRESDB_SCHEMA=public \
+    DB_POSTGRESDB_SSL_ENABLED=true \
+    DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false \
+    N8N_ENCRYPTION_KEY=cliply_fixed_n8n_key_2026_do_not_change_keep_same
 
 WORKDIR /app
 USER root
 
 RUN npm init -y >/dev/null 2>&1 \
-  && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb
+    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -40,120 +39,55 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { execSync, spawn } = require('node:child_process');
-const crypto = require('node:crypto');
 const httpProxy = require('http-proxy');
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
 const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
 
-const RAM_TOKEN = process.env.RAM_TOKEN || '';
-const MONGODB_URI = process.env.MONGODB_URI || '';
+const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
+
+// MongoDB này chỉ dùng cho RAM/cost/network, không dùng cho n8n login/workflow.
+const MONGODB_URI =
+  process.env.MONGODB_URI ||
+  'mongodb+srv://tylauj04:t482169@cluster0.ygab0.mongodb.net';
+
 const TARGET_DB = process.env.TARGET_DB || 'application-manager';
-
-// n8n database chính: PostgreSQL/Supabase.
-// Dữ liệu n8n như user đăng nhập, workflows, credentials, OAuth token, settings
-// sẽ được lưu trong PostgreSQL thay vì /home/node/.n8n/database.sqlite.
-// RAM/cost/network vẫn dùng MONGODB_URI riêng ở trên, không dùng PostgreSQL này.
-const N8N_DATA_DIR = process.env.N8N_USER_FOLDER || '/home/node/.n8n';
-
-const DEFAULT_N8N_POSTGRES = {
-  host: 'db.jiewotcsywbwiuxtpwpm.supabase.co',
-  port: '5432',
-  database: 'postgres',
-  user: 'postgres',
-  // Mật khẩu có ký tự @ nên không parse bằng URL thô; để riêng ở đây sẽ đúng hơn.
-  password: 'Ty48216965@',
-};
-
-const DERIVED_N8N_ENCRYPTION_KEY = crypto
-  .createHash('sha256')
-  .update(
-    process.env.N8N_ENCRYPTION_KEY ||
-      process.env.DB_POSTGRESDB_PASSWORD ||
-      DEFAULT_N8N_POSTGRES.password
-  )
-  .digest('hex');
 
 let mongoose = null;
 let CostHistory = null;
 
 function getProjectName() {
-  // Ưu tiên tên cố định người dùng tự đặt.
-  // Railway đổi hostname sau mỗi redeploy, nên không dùng hostname làm ID chính nếu có Railway service env.
+  if (process.env.MACHINE_ID) {
+    return process.env.MACHINE_ID;
+  }
+
+  if (process.env.RAILWAY_SERVICE_ID) {
+    return `railway_${process.env.RAILWAY_SERVICE_ID}`;
+  }
+
+  if (process.env.RAILWAY_PROJECT_ID && process.env.RAILWAY_SERVICE_NAME) {
+    return `railway_${process.env.RAILWAY_PROJECT_ID}_${process.env.RAILWAY_SERVICE_NAME}`;
+  }
+
+  if (process.env.RENDER_SERVICE_ID) {
+    return `render_${process.env.RENDER_SERVICE_ID}`;
+  }
+
+  if (process.env.RENDER_EXTERNAL_URL) {
+    try {
+      return `render_${new URL(process.env.RENDER_EXTERNAL_URL).hostname}`;
+    } catch {}
+  }
+
   try {
-    if (process.env.MACHINE_ID) {
-      return process.env.MACHINE_ID;
-    }
-
-    if (process.env.RAILWAY_SERVICE_ID) {
-      return `railway_${process.env.RAILWAY_SERVICE_ID}`;
-    }
-
-    if (process.env.RAILWAY_PROJECT_ID && process.env.RAILWAY_SERVICE_NAME) {
-      return `railway_${process.env.RAILWAY_PROJECT_ID}_${process.env.RAILWAY_SERVICE_NAME}`;
-    }
-
-    if (process.env.RENDER_SERVICE_ID) {
-      return `render_${process.env.RENDER_SERVICE_ID}`;
-    }
-
-    if (process.env.RENDER_EXTERNAL_URL) {
-      try {
-        return `render_${new URL(process.env.RENDER_EXTERNAL_URL).hostname}`;
-      } catch {}
-    }
-
     const host = os.hostname();
 
-    const renderHostMatch = host.match(/^(srv-[a-z0-9]+)/);
-    if (renderHostMatch) return `render_${renderHostMatch[1]}`;
-
-    const genericHosts = [
-      'localhost',
-      '127.0.0.1',
-      'desktop',
-      'laptop',
-      'server',
-    ];
-
-    const isGeneric =
-      genericHosts.some((g) => host.toLowerCase().includes(g)) ||
-      host.length < 3;
-
-    if (isGeneric) {
-      let packageJsonName = 'unknown';
-
-      try {
-        const packageJsonPath = path.join(process.cwd(), 'package.json');
-
-        if (fs.existsSync(packageJsonPath)) {
-          const packageJson = JSON.parse(
-            fs.readFileSync(packageJsonPath, 'utf8')
-          );
-
-          packageJsonName = packageJson.name || 'unknown';
-        }
-      } catch {}
-
-      const ips = Object.values(os.networkInterfaces())
-        .flat()
-        .filter((f) => f && !f.internal && f.family === 'IPv4')
-        .map((f) => f.address)
-        .join('_');
-
-      return `${host}_${packageJsonName}_${ips || 'noip'}`;
+    if (host && !host.includes('localhost')) {
+      return host;
     }
+  } catch {}
 
-    return host;
-  } catch {
-    return (
-      process.env.MACHINE_ID ||
-      process.env.RAILWAY_SERVICE_ID ||
-      process.env.RENDER_SERVICE_ID ||
-      os.hostname() ||
-      'unknown'
-    );
-  }
+  return 'unknown-machine';
 }
 
 function loadMongoose() {
@@ -287,25 +221,22 @@ function safeExec(cmd) {
 async function measureCpuPercent() {
   const startCpu = os.cpus();
   const startUsage = process.cpuUsage();
-  const hrStart = process.hrtime();
+  const hrStart = process.hrtime.bigint();
 
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   const endCpu = os.cpus();
   const endUsage = process.cpuUsage(startUsage);
-  const hrEnd = process.hrtime();
 
-  const elapTimeMS =
-    (hrEnd[0] * 1e9 + hrEnd[1] - (hrStart[0] * 1e9 + hrStart[1])) /
-    1e6;
+  const elapsedMs = Math.max(
+    Number(process.hrtime.bigint() - hrStart) / 1e6,
+    1
+  );
 
-  const cpuPercentNode =
-    elapTimeMS > 0
-      ? (
-          ((endUsage.user / 1000 + endUsage.system / 1000) / elapTimeMS) *
-          100
-        ).toFixed(2)
-      : '0.00';
+  const cpuPercentNode = (
+    ((endUsage.user + endUsage.system) / 1000 / elapsedMs) *
+    100
+  ).toFixed(2);
 
   let totalDiff = 0;
   let idleDiff = 0;
@@ -314,14 +245,10 @@ async function measureCpuPercent() {
     const s = startCpu[i].times;
     const e = endCpu[i].times;
 
-    totalDiff +=
-      e.user +
-      e.nice +
-      e.sys +
-      e.idle +
-      e.irq -
-      (s.user + s.nice + s.sys + s.idle + s.irq);
+    const startTotal = s.user + s.nice + s.sys + s.idle + s.irq;
+    const endTotal = e.user + e.nice + e.sys + e.idle + e.irq;
 
+    totalDiff += endTotal - startTotal;
     idleDiff += e.idle - s.idle;
   }
 
@@ -362,11 +289,9 @@ async function buildMonitorStats() {
 
   if (process.platform === 'linux') {
     const freeOutput = safeExec('free -h');
-
     if (freeOutput) stats.freeCommandOutput = freeOutput;
 
     const ps = safeExec('ps aux --sort=-%mem | head -n 6');
-
     if (ps) stats.topProcesses = ps.split('\n');
 
     const logPaths = [
@@ -479,6 +404,7 @@ async function updateCostHistory(rssBytes) {
 
       record.lastMeasurementTime = now;
 
+      // Railway x2
       record.memoryCost = record.accumulatedMemoryMinutes * 0.000462;
       record.cpuCost = record.accumulatedCpuMinutes * 0.000926;
       record.egressCost =
@@ -558,58 +484,6 @@ async function updateCostHistory(rssBytes) {
     };
   }
 }
-
-function parsePostgresUrl(raw) {
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw);
-
-    return {
-      host: url.hostname,
-      port: url.port || '5432',
-      database: url.pathname.replace(/^\//, '') || 'postgres',
-      user: decodeURIComponent(url.username || 'postgres'),
-      password: decodeURIComponent(url.password || ''),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function getN8nPostgresConfig() {
-  // Có thể override bằng DATABASE_URL/POSTGRES_URL nếu sau này đổi database.
-  // Lưu ý: nếu password chứa @ thì trong URL phải encode thành %40.
-  const parsed =
-    parsePostgresUrl(process.env.DATABASE_URL) ||
-    parsePostgresUrl(process.env.POSTGRES_URL) ||
-    parsePostgresUrl(process.env.POSTGRESQL_URL) ||
-    parsePostgresUrl(process.env.DB_POSTGRESDB_URL);
-
-  return {
-    host:
-      process.env.DB_POSTGRESDB_HOST ||
-      parsed?.host ||
-      DEFAULT_N8N_POSTGRES.host,
-    port:
-      process.env.DB_POSTGRESDB_PORT ||
-      parsed?.port ||
-      DEFAULT_N8N_POSTGRES.port,
-    database:
-      process.env.DB_POSTGRESDB_DATABASE ||
-      parsed?.database ||
-      DEFAULT_N8N_POSTGRES.database,
-    user:
-      process.env.DB_POSTGRESDB_USER ||
-      parsed?.user ||
-      DEFAULT_N8N_POSTGRES.user,
-    password:
-      process.env.DB_POSTGRESDB_PASSWORD ||
-      parsed?.password ||
-      DEFAULT_N8N_POSTGRES.password,
-  };
-}
-
 
 function sendJson(res, code, payload) {
   res.writeHead(code, {
@@ -794,7 +668,8 @@ function applyN8nPublicUrlEnv(n8nEnv, publicUrlInput = '') {
     n8nEnv.N8N_PROXY_HOPS = process.env.N8N_PROXY_HOPS || '1';
 
     if (url.protocol === 'https:') {
-      n8nEnv.N8N_SECURE_COOKIE = process.env.N8N_SECURE_COOKIE || 'true';
+      n8nEnv.N8N_SECURE_COOKIE =
+        process.env.N8N_SECURE_COOKIE || 'true';
     }
 
     console.log('[n8n] Public URL detected:', publicUrl);
@@ -818,10 +693,34 @@ function applyN8nPublicUrlEnv(n8nEnv, publicUrlInput = '') {
 }
 
 function buildN8nEnv(publicUrlInput = '') {
-  const pg = getN8nPostgresConfig();
-
   const n8nEnv = {
     ...process.env,
+
+    // PostgreSQL Supabase Pooler IPv4 cho n8n.
+    DB_TYPE: process.env.DB_TYPE || 'postgresdb',
+    DB_POSTGRESDB_HOST:
+      process.env.DB_POSTGRESDB_HOST ||
+      'aws-1-ap-south-1.pooler.supabase.com',
+    DB_POSTGRESDB_PORT:
+      process.env.DB_POSTGRESDB_PORT || '5432',
+    DB_POSTGRESDB_DATABASE:
+      process.env.DB_POSTGRESDB_DATABASE || 'postgres',
+    DB_POSTGRESDB_USER:
+      process.env.DB_POSTGRESDB_USER ||
+      'postgres.jiewotcsywbwiuxtpwpm',
+    DB_POSTGRESDB_PASSWORD:
+      process.env.DB_POSTGRESDB_PASSWORD ||
+      'Ty48216965@',
+    DB_POSTGRESDB_SCHEMA:
+      process.env.DB_POSTGRESDB_SCHEMA || 'public',
+    DB_POSTGRESDB_SSL_ENABLED:
+      process.env.DB_POSTGRESDB_SSL_ENABLED || 'true',
+    DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED:
+      process.env.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED || 'false',
+
+    N8N_ENCRYPTION_KEY:
+      process.env.N8N_ENCRYPTION_KEY ||
+      'cliply_fixed_n8n_key_2026_do_not_change_keep_same',
 
     N8N_PORT: String(INTERNAL_N8N_PORT),
     N8N_LISTEN_ADDRESS: '127.0.0.1',
@@ -837,28 +736,6 @@ function buildN8nEnv(publicUrlInput = '') {
 
     N8N_COMMUNITY_PACKAGES_ENABLED:
       process.env.N8N_COMMUNITY_PACKAGES_ENABLED || 'false',
-
-    N8N_USER_FOLDER:
-      process.env.N8N_USER_FOLDER || N8N_DATA_DIR,
-
-    // PostgreSQL là database chính của n8n.
-    // Build/redeploy container mới vẫn giữ user, login, workflows, credentials và OAuth token.
-    DB_TYPE: process.env.DB_TYPE || 'postgresdb',
-    DB_POSTGRESDB_HOST: pg.host,
-    DB_POSTGRESDB_PORT: String(pg.port),
-    DB_POSTGRESDB_DATABASE: pg.database,
-    DB_POSTGRESDB_USER: pg.user,
-    DB_POSTGRESDB_PASSWORD: pg.password,
-    DB_POSTGRESDB_SCHEMA: process.env.DB_POSTGRESDB_SCHEMA || 'public',
-    DB_POSTGRESDB_SSL_ENABLED:
-      process.env.DB_POSTGRESDB_SSL_ENABLED || 'true',
-    DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED:
-      process.env.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED || 'false',
-
-    // Cố định key để credentials/OAuth token giải mã được sau redeploy.
-    // Tốt nhất nên set N8N_ENCRYPTION_KEY riêng; nếu không có thì tự derive ổn định từ mật khẩu PostgreSQL.
-    N8N_ENCRYPTION_KEY:
-      process.env.N8N_ENCRYPTION_KEY || DERIVED_N8N_ENCRYPTION_KEY,
 
     EXECUTIONS_PROCESS:
       process.env.EXECUTIONS_PROCESS || 'main',
@@ -966,7 +843,10 @@ proxy.on('proxyReq', (proxyReq, req) => {
 
     proxyReq.setHeader('x-forwarded-host', url.host);
     proxyReq.setHeader('x-forwarded-proto', url.protocol.replace(':', ''));
-    proxyReq.setHeader('x-forwarded-port', url.protocol === 'https:' ? '443' : '80');
+    proxyReq.setHeader(
+      'x-forwarded-port',
+      url.protocol === 'https:' ? '443' : '80'
+    );
   }
 });
 
@@ -1014,7 +894,6 @@ async function ensureN8nStarted(publicUrlInput = '') {
     await waitForPort(INTERNAL_N8N_PORT, '127.0.0.1');
 
     n8nReady = true;
-
 
     while (pendingQueue.length) {
       const { req, res, timer } = pendingQueue.shift();
