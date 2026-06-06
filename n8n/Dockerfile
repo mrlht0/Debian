@@ -30,6 +30,8 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { execSync, spawn } = require('node:child_process');
+const crypto = require('node:crypto');
+const { MongoClient, GridFSBucket } = require('mongodb');
 const httpProxy = require('http-proxy');
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
@@ -39,17 +41,61 @@ const RAM_TOKEN = process.env.RAM_TOKEN || '';
 const MONGODB_URI = process.env.MONGODB_URI || '';
 const TARGET_DB = process.env.TARGET_DB || 'application-manager';
 
+// MongoDB này dùng riêng để backup/restore dữ liệu n8n:
+// user đăng nhập, workflows, credentials, OAuth token, settings trong /home/node/.n8n.
+// n8n không hỗ trợ MongoDB làm DB chính trực tiếp, nên wrapper dùng MongoDB như persistent backup.
+const N8N_DATA_DIR = process.env.N8N_USER_FOLDER || '/home/node/.n8n';
+const N8N_BACKUP_MONGODB_URI =
+  process.env.N8N_BACKUP_MONGODB_URI ||
+  process.env.N8N_PERSIST_MONGODB_URI ||
+  'mongodb+srv://tljapan0_db_user:t482169@tljapan0.rlbsfpi.mongodb.net/?appName=tljapan0';
+const N8N_BACKUP_DB = process.env.N8N_BACKUP_DB || 'n8n-persistent';
+const N8N_BACKUP_BUCKET = process.env.N8N_BACKUP_BUCKET || 'n8nDataBackups';
+const N8N_BACKUP_INTERVAL_MS = Number(process.env.N8N_BACKUP_INTERVAL_MS || 300000);
+const N8N_BACKUP_KEY =
+  process.env.N8N_BACKUP_KEY ||
+  process.env.MACHINE_ID ||
+  process.env.RAILWAY_SERVICE_ID ||
+  process.env.RENDER_SERVICE_ID ||
+  'default-n8n';
+const DERIVED_N8N_ENCRYPTION_KEY = crypto
+  .createHash('sha256')
+  .update(process.env.N8N_ENCRYPTION_KEY || N8N_BACKUP_MONGODB_URI || N8N_BACKUP_KEY)
+  .digest('hex');
+
 let mongoose = null;
 let CostHistory = null;
 
 function getProjectName() {
+  // Ưu tiên tên cố định người dùng tự đặt.
+  // Railway đổi hostname sau mỗi redeploy, nên không dùng hostname làm ID chính nếu có Railway service env.
   try {
+    if (process.env.MACHINE_ID) {
+      return process.env.MACHINE_ID;
+    }
+
+    if (process.env.RAILWAY_SERVICE_ID) {
+      return `railway_${process.env.RAILWAY_SERVICE_ID}`;
+    }
+
+    if (process.env.RAILWAY_PROJECT_ID && process.env.RAILWAY_SERVICE_NAME) {
+      return `railway_${process.env.RAILWAY_PROJECT_ID}_${process.env.RAILWAY_SERVICE_NAME}`;
+    }
+
+    if (process.env.RENDER_SERVICE_ID) {
+      return `render_${process.env.RENDER_SERVICE_ID}`;
+    }
+
+    if (process.env.RENDER_EXTERNAL_URL) {
+      try {
+        return `render_${new URL(process.env.RENDER_EXTERNAL_URL).hostname}`;
+      } catch {}
+    }
+
     const host = os.hostname();
 
     const renderHostMatch = host.match(/^(srv-[a-z0-9]+)/);
-    if (renderHostMatch) return renderHostMatch[1];
-
-    if (process.env.MACHINE_ID) return process.env.MACHINE_ID;
+    if (renderHostMatch) return `render_${renderHostMatch[1]}`;
 
     const genericHosts = [
       'localhost',
@@ -89,7 +135,13 @@ function getProjectName() {
 
     return host;
   } catch {
-    return process.env.MACHINE_ID || os.hostname() || 'unknown';
+    return (
+      process.env.MACHINE_ID ||
+      process.env.RAILWAY_SERVICE_ID ||
+      process.env.RENDER_SERVICE_ID ||
+      os.hostname() ||
+      'unknown'
+    );
   }
 }
 
@@ -496,6 +548,232 @@ async function updateCostHistory(rssBytes) {
   }
 }
 
+function buildN8nBackupMongoUri() {
+  let uri = N8N_BACKUP_MONGODB_URI;
+
+  try {
+    const u = new URL(uri);
+    u.pathname = `/${N8N_BACKUP_DB}`;
+    return u.toString();
+  } catch {
+    const [base, qs] = uri.split('?');
+
+    return `${base.replace(/\/+$/, '')}/${N8N_BACKUP_DB}?${
+      qs || 'retryWrites=true&w=majority'
+    }`;
+  }
+}
+
+async function withN8nBackupMongo(fn) {
+  if (!N8N_BACKUP_MONGODB_URI) {
+    console.log('[n8n-backup] disabled: missing N8N_BACKUP_MONGODB_URI');
+    return null;
+  }
+
+  const client = new MongoClient(buildN8nBackupMongoUri(), {
+    serverSelectionTimeoutMS: 15000,
+  });
+
+  try {
+    await client.connect();
+
+    const db = client.db(N8N_BACKUP_DB);
+    const bucket = new GridFSBucket(db, {
+      bucketName: N8N_BACKUP_BUCKET,
+    });
+
+    return await fn({
+      client,
+      db,
+      bucket,
+    });
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+function hasN8nLocalData() {
+  try {
+    return (
+      fs.existsSync(path.join(N8N_DATA_DIR, 'database.sqlite')) ||
+      fs.existsSync(path.join(N8N_DATA_DIR, 'config')) ||
+      fs.existsSync(path.join(N8N_DATA_DIR, 'config.json'))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function ensureN8nDataDir() {
+  fs.mkdirSync(N8N_DATA_DIR, {
+    recursive: true,
+  });
+}
+
+function createTarGz(sourceDir, outputFile) {
+  const parent = path.dirname(sourceDir);
+  const base = path.basename(sourceDir);
+
+  execSync(`tar -czf ${JSON.stringify(outputFile)} -C ${JSON.stringify(parent)} ${JSON.stringify(base)}`, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function extractTarGz(archiveFile, targetParentDir) {
+  fs.mkdirSync(targetParentDir, {
+    recursive: true,
+  });
+
+  execSync(`tar -xzf ${JSON.stringify(archiveFile)} -C ${JSON.stringify(targetParentDir)}`, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+async function restoreN8nDataFromMongoIfNeeded() {
+  if (hasN8nLocalData()) {
+    console.log('[n8n-backup] local n8n data exists, skip restore');
+    return;
+  }
+
+  console.log('[n8n-backup] local n8n data not found, trying restore from MongoDB');
+
+  try {
+    await withN8nBackupMongo(async ({ db, bucket }) => {
+      const files = await db
+        .collection(`${N8N_BACKUP_BUCKET}.files`)
+        .find({
+          'metadata.backupKey': N8N_BACKUP_KEY,
+          'metadata.kind': 'n8n-data-dir',
+        })
+        .sort({
+          uploadDate: -1,
+        })
+        .limit(1)
+        .toArray();
+
+      if (!files.length) {
+        console.log('[n8n-backup] no backup found in MongoDB');
+        ensureN8nDataDir();
+        return;
+      }
+
+      const backupFile = files[0];
+      const tmpArchive = '/tmp/n8n-data-restore.tgz';
+
+      await new Promise((resolve, reject) => {
+        const download = bucket.openDownloadStream(backupFile._id);
+        const output = fs.createWriteStream(tmpArchive);
+
+        download.on('error', reject);
+        output.on('error', reject);
+        output.on('finish', resolve);
+
+        download.pipe(output);
+      });
+
+      extractTarGz(tmpArchive, path.dirname(N8N_DATA_DIR));
+
+      try {
+        fs.unlinkSync(tmpArchive);
+      } catch {}
+
+      console.log(
+        `[n8n-backup] restored n8n data from MongoDB: ${backupFile.filename}`
+      );
+    });
+  } catch (err) {
+    console.warn('[n8n-backup] restore failed:', err.message);
+    ensureN8nDataDir();
+  }
+}
+
+let backupInProgress = false;
+
+async function backupN8nDataToMongo(reason = 'manual') {
+  if (backupInProgress) return;
+
+  if (!hasN8nLocalData()) {
+    console.log('[n8n-backup] skip backup: no local n8n data yet');
+    return;
+  }
+
+  backupInProgress = true;
+
+  try {
+    const now = new Date();
+    const tmpArchive = `/tmp/n8n-data-backup-${Date.now()}.tgz`;
+
+    createTarGz(N8N_DATA_DIR, tmpArchive);
+
+    await withN8nBackupMongo(async ({ db, bucket }) => {
+      const filename = `n8n-data-${N8N_BACKUP_KEY}-${now.toISOString()}.tgz`;
+
+      await new Promise((resolve, reject) => {
+        const upload = bucket.openUploadStream(filename, {
+          metadata: {
+            kind: 'n8n-data-dir',
+            backupKey: N8N_BACKUP_KEY,
+            projectName: getProjectName(),
+            reason,
+            createdAt: now,
+          },
+        });
+
+        const input = fs.createReadStream(tmpArchive);
+
+        upload.on('error', reject);
+        upload.on('finish', resolve);
+        input.on('error', reject);
+
+        input.pipe(upload);
+      });
+
+      const oldFiles = await db
+        .collection(`${N8N_BACKUP_BUCKET}.files`)
+        .find({
+          'metadata.backupKey': N8N_BACKUP_KEY,
+          'metadata.kind': 'n8n-data-dir',
+        })
+        .sort({
+          uploadDate: -1,
+        })
+        .skip(Number(process.env.N8N_BACKUP_KEEP || 5))
+        .toArray();
+
+      for (const file of oldFiles) {
+        try {
+          await bucket.delete(file._id);
+        } catch {}
+      }
+
+      console.log(`[n8n-backup] uploaded backup to MongoDB: ${filename}`);
+    });
+
+    try {
+      fs.unlinkSync(tmpArchive);
+    } catch {}
+  } catch (err) {
+    console.warn('[n8n-backup] backup failed:', err.message);
+  } finally {
+    backupInProgress = false;
+  }
+}
+
+function startN8nBackupLoop() {
+  if (!N8N_BACKUP_MONGODB_URI || N8N_BACKUP_INTERVAL_MS <= 0) {
+    return;
+  }
+
+  setTimeout(() => {
+    backupN8nDataToMongo('startup').catch(() => {});
+  }, 30000);
+
+  setInterval(() => {
+    backupN8nDataToMongo('interval').catch(() => {});
+  }, N8N_BACKUP_INTERVAL_MS);
+}
+
+
 function sendJson(res, code, payload) {
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -721,6 +999,14 @@ function buildN8nEnv(publicUrlInput = '') {
     N8N_COMMUNITY_PACKAGES_ENABLED:
       process.env.N8N_COMMUNITY_PACKAGES_ENABLED || 'false',
 
+    N8N_USER_FOLDER:
+      process.env.N8N_USER_FOLDER || N8N_DATA_DIR,
+
+    // Cố định key để credentials/OAuth token trong /home/node/.n8n giải mã được sau redeploy.
+    // Nên set N8N_ENCRYPTION_KEY riêng trên production; nếu không có thì tự derive ổn định từ MongoDB backup URI.
+    N8N_ENCRYPTION_KEY:
+      process.env.N8N_ENCRYPTION_KEY || DERIVED_N8N_ENCRYPTION_KEY,
+
     EXECUTIONS_PROCESS:
       process.env.EXECUTIONS_PROCESS || 'main',
 
@@ -857,6 +1143,8 @@ async function ensureN8nStarted(publicUrlInput = '') {
   }
 
   n8nStartingPromise = (async () => {
+    await restoreN8nDataFromMongoIfNeeded();
+
     n8nChild = startN8n(publicUrlInput);
 
     if (!n8nChild) {
@@ -867,6 +1155,8 @@ async function ensureN8nStarted(publicUrlInput = '') {
     await waitForPort(INTERNAL_N8N_PORT, '127.0.0.1');
 
     n8nReady = true;
+
+    startN8nBackupLoop();
 
     while (pendingQueue.length) {
       const { req, res, timer } = pendingQueue.shift();
