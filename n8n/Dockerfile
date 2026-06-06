@@ -11,10 +11,8 @@ ENV N8N_PORT=5678 \
   EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
   EXECUTIONS_DATA_SAVE_ON_ERROR=none \
   EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
-  NODE_FUNCTION_ALLOW_EXTERNAL=mongodb \
+  NODE_FUNCTION_ALLOW_EXTERNAL=mongodb,playwright \
   NODE_FUNCTION_ALLOW_BUILTIN=* \
-  NODE_FUNCTION_ALLOW_EXTERNAL=* \
-  NODE_FUNCTION_ALLOW_EXTERNAL=playwright \
   NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
 
 WORKDIR /app
@@ -217,9 +215,95 @@ async function handleRamRequest(req, res) {
   sendJson(res, 200, { identity: stats.identity, cpu: stats.cpu, os: stats.os, node: stats.node, timestamp: stats.timestamp, ...(stats.freeCommandOutput ? { freeCommandOutput: stats.freeCommandOutput } : {}), ...(stats.topProcesses ? { topProcesses: stats.topProcesses } : {}), ...(stats.memGuardLog ? { memGuardLog: stats.memGuardLog } : {}), projectCost });
 }
 
+function normalizePublicUrl(raw) {
+  if (!raw) return '';
+  let value = String(raw).trim();
+  if (!value) return '';
+
+  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return value.replace(/\/+$/, '');
+  }
+}
+
+function detectPublicUrl() {
+  const candidates = [
+    process.env.WEBHOOK_URL,
+    process.env.N8N_EDITOR_BASE_URL,
+
+    // Render tự cấp biến này
+    process.env.RENDER_EXTERNAL_URL,
+
+    // Railway có thể cấp một trong các biến này tùy kiểu deploy/domain
+    process.env.RAILWAY_STATIC_URL,
+    process.env.RAILWAY_PUBLIC_DOMAIN,
+    process.env.RAILWAY_SERVICE_DOMAIN,
+
+    // Fallback cho các nền tảng khác hoặc nếu bạn tự đặt 1 biến chung
+    process.env.PUBLIC_URL,
+    process.env.PUBLIC_DOMAIN,
+    process.env.APP_URL,
+    process.env.BASE_URL,
+  ];
+
+  for (const item of candidates) {
+    const normalized = normalizePublicUrl(item);
+    if (normalized) return normalized;
+  }
+
+  return '';
+}
+
+function applyN8nPublicUrlEnv(n8nEnv) {
+  const publicUrl = detectPublicUrl();
+
+  if (!publicUrl) {
+    console.warn('[n8n] Public URL not detected. n8n may show localhost for webhook/OAuth callback.');
+    return n8nEnv;
+  }
+
+  try {
+    const url = new URL(publicUrl);
+
+    n8nEnv.WEBHOOK_URL = `${publicUrl}/`;
+    n8nEnv.N8N_EDITOR_BASE_URL = publicUrl;
+    n8nEnv.N8N_HOST = url.hostname;
+    n8nEnv.N8N_PROTOCOL = url.protocol.replace(':', '');
+
+    console.log('[n8n] Public URL detected:', publicUrl);
+    console.log('[n8n] WEBHOOK_URL:', n8nEnv.WEBHOOK_URL);
+    console.log('[n8n] N8N_EDITOR_BASE_URL:', n8nEnv.N8N_EDITOR_BASE_URL);
+    console.log('[n8n] N8N_HOST:', n8nEnv.N8N_HOST);
+    console.log('[n8n] N8N_PROTOCOL:', n8nEnv.N8N_PROTOCOL);
+  } catch (err) {
+    console.warn('[n8n] Invalid public URL:', publicUrl, err.message);
+  }
+
+  return n8nEnv;
+}
+
 function startN8n() {
-  const n8nEnv = { ...process.env, N8N_PORT: String(INTERNAL_N8N_PORT), N8N_LISTEN_ADDRESS: '127.0.0.1' };
-  if (!n8nEnv.WEBHOOK_URL && n8nEnv.RENDER_EXTERNAL_URL) n8nEnv.WEBHOOK_URL = n8nEnv.RENDER_EXTERNAL_URL;
+  const n8nEnv = {
+    ...process.env,
+    N8N_PORT: String(INTERNAL_N8N_PORT),
+    N8N_LISTEN_ADDRESS: '127.0.0.1',
+
+    N8N_HIRING_BANNER: process.env.N8N_HIRING_BANNER || 'false',
+    N8N_DIAGNOSTICS_ENABLED: process.env.N8N_DIAGNOSTICS_ENABLED || 'false',
+    N8N_RUNNERS_ENABLED: process.env.N8N_RUNNERS_ENABLED || 'false',
+    N8N_COMMUNITY_PACKAGES_ENABLED: process.env.N8N_COMMUNITY_PACKAGES_ENABLED || 'false',
+    EXECUTIONS_PROCESS: process.env.EXECUTIONS_PROCESS || 'main',
+    EXECUTIONS_DATA_SAVE_ON_SUCCESS: process.env.EXECUTIONS_DATA_SAVE_ON_SUCCESS || 'none',
+    EXECUTIONS_DATA_SAVE_ON_ERROR: process.env.EXECUTIONS_DATA_SAVE_ON_ERROR || 'none',
+    EXECUTIONS_DATA_SAVE_ON_PROGRESS: process.env.EXECUTIONS_DATA_SAVE_ON_PROGRESS || 'false',
+  };
+
+  applyN8nPublicUrlEnv(n8nEnv);
+
   const child = spawn('n8n', ['start'], { stdio: 'inherit', env: n8nEnv });
   child.on('exit', (code, signal) => { process.exit(signal ? 1 : code ?? 0); });
   return child;
