@@ -19,7 +19,6 @@ ENV N8N_PORT=5678 \
     DB_POSTGRESDB_DATABASE=postgres \
     DB_POSTGRESDB_USER=postgres.jiewotcsywbwiuxtpwpm \
     DB_POSTGRESDB_PASSWORD=Ty48216965@ \
-    DB_POSTGRESDB_SCHEMA=public \
     DB_POSTGRESDB_SSL_ENABLED=true \
     DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false \
     N8N_ENCRYPTION_KEY=cliply_fixed_n8n_key_2026_do_not_change_keep_same
@@ -28,7 +27,7 @@ WORKDIR /app
 USER root
 
 RUN npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb
+    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -37,9 +36,9 @@ const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
-const path = require('node:path');
 const { execSync, spawn } = require('node:child_process');
 const httpProxy = require('http-proxy');
+const { Client: PgClient } = require('pg');
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
 const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
@@ -56,40 +55,102 @@ const TARGET_DB = process.env.TARGET_DB || 'application-manager';
 let mongoose = null;
 let CostHistory = null;
 
-function getProjectName() {
+// ================= STABLE ID =================
+function sanitizeId(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function getStableMachineId() {
   if (process.env.MACHINE_ID) {
-    return process.env.MACHINE_ID;
+    return sanitizeId(process.env.MACHINE_ID);
   }
 
   if (process.env.RAILWAY_SERVICE_ID) {
-    return `railway_${process.env.RAILWAY_SERVICE_ID}`;
+    return `railway_${sanitizeId(process.env.RAILWAY_SERVICE_ID)}`;
   }
 
   if (process.env.RAILWAY_PROJECT_ID && process.env.RAILWAY_SERVICE_NAME) {
-    return `railway_${process.env.RAILWAY_PROJECT_ID}_${process.env.RAILWAY_SERVICE_NAME}`;
+    return `railway_${sanitizeId(process.env.RAILWAY_PROJECT_ID)}_${sanitizeId(process.env.RAILWAY_SERVICE_NAME)}`;
+  }
+
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    return `railway_${sanitizeId(process.env.RAILWAY_PUBLIC_DOMAIN)}`;
+  }
+
+  if (process.env.RAILWAY_STATIC_URL) {
+    return `railway_${sanitizeId(process.env.RAILWAY_STATIC_URL)}`;
   }
 
   if (process.env.RENDER_SERVICE_ID) {
-    return `render_${process.env.RENDER_SERVICE_ID}`;
+    return `render_${sanitizeId(process.env.RENDER_SERVICE_ID)}`;
   }
 
   if (process.env.RENDER_EXTERNAL_URL) {
     try {
-      return `render_${new URL(process.env.RENDER_EXTERNAL_URL).hostname}`;
+      return `render_${sanitizeId(new URL(process.env.RENDER_EXTERNAL_URL).hostname)}`;
     } catch {}
   }
 
-  try {
-    const host = os.hostname();
+  if (process.env.FLY_APP_NAME) {
+    return `fly_${sanitizeId(process.env.FLY_APP_NAME)}`;
+  }
 
-    if (host && !host.includes('localhost')) {
-      return host;
-    }
-  } catch {}
+  if (process.env.KOYEB_SERVICE_NAME) {
+    return `koyeb_${sanitizeId(process.env.KOYEB_SERVICE_NAME)}`;
+  }
 
-  return 'unknown-machine';
+  if (process.env.COOLIFY_FQDN) {
+    return `coolify_${sanitizeId(process.env.COOLIFY_FQDN)}`;
+  }
+
+  const publicCandidates = [
+    process.env.PUBLIC_DOMAIN,
+    process.env.PUBLIC_URL,
+    process.env.APP_URL,
+    process.env.BASE_URL,
+    process.env.WEBHOOK_URL,
+    process.env.N8N_EDITOR_BASE_URL,
+  ];
+
+  for (const raw of publicCandidates) {
+    if (!raw) continue;
+
+    try {
+      let value = String(raw).trim();
+      if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+      const host = new URL(value).hostname;
+
+      if (
+        host &&
+        !host.includes('localhost') &&
+        !host.startsWith('127.') &&
+        !host.startsWith('0.0.0.0')
+      ) {
+        return `domain_${sanitizeId(host)}`;
+      }
+    } catch {}
+  }
+
+  return `vps_${sanitizeId(os.hostname() || 'unknown')}`;
 }
 
+function getProjectName() {
+  return getStableMachineId();
+}
+
+function getN8nSchemaName(machineId) {
+  if (process.env.DB_POSTGRESDB_SCHEMA) {
+    return sanitizeId(process.env.DB_POSTGRESDB_SCHEMA).replace(/-/g, '_');
+  }
+
+  return `n8n_${sanitizeId(machineId).replace(/-/g, '_')}`;
+}
+
+// ================= MONGODB COST =================
 function loadMongoose() {
   if (mongoose) return mongoose;
 
@@ -227,11 +288,7 @@ async function measureCpuPercent() {
 
   const endCpu = os.cpus();
   const endUsage = process.cpuUsage(startUsage);
-
-  const elapsedMs = Math.max(
-    Number(process.hrtime.bigint() - hrStart) / 1e6,
-    1
-  );
+  const elapsedMs = Math.max(Number(process.hrtime.bigint() - hrStart) / 1e6, 1);
 
   const cpuPercentNode = (
     ((endUsage.user + endUsage.system) / 1000 / elapsedMs) *
@@ -263,6 +320,31 @@ async function measureCpuPercent() {
   };
 }
 
+function getCurrentTxBytes() {
+  if (process.platform !== 'linux') return 0;
+
+  let total = 0;
+
+  try {
+    const base = '/sys/class/net';
+    const interfaces = fs.readdirSync(base);
+
+    for (const iface of interfaces) {
+      if (iface === 'lo') continue;
+
+      const txPath = `${base}/${iface}/statistics/tx_bytes`;
+
+      if (fs.existsSync(txPath)) {
+        const value = parseInt(fs.readFileSync(txPath, 'utf8').trim(), 10);
+
+        if (Number.isFinite(value)) total += value;
+      }
+    }
+  } catch {}
+
+  return total;
+}
+
 async function buildMonitorStats() {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
@@ -289,9 +371,11 @@ async function buildMonitorStats() {
 
   if (process.platform === 'linux') {
     const freeOutput = safeExec('free -h');
+
     if (freeOutput) stats.freeCommandOutput = freeOutput;
 
     const ps = safeExec('ps aux --sort=-%mem | head -n 6');
+
     if (ps) stats.topProcesses = ps.split('\n');
 
     const logPaths = [
@@ -350,18 +434,7 @@ async function updateCostHistory(rssBytes) {
     ).padStart(2, '0')}`;
 
     const projectName = getProjectName();
-
-    let currentTxBytes = 0;
-
-    if (process.platform === 'linux') {
-      try {
-        const txPath = '/sys/class/net/eth0/statistics/tx_bytes';
-
-        if (fs.existsSync(txPath)) {
-          currentTxBytes = parseInt(fs.readFileSync(txPath, 'utf8').trim(), 10);
-        }
-      } catch {}
-    }
+    const currentTxBytes = getCurrentTxBytes();
 
     let record = await CostHistory.findOne({
       month: currentMonthStr,
@@ -541,6 +614,7 @@ async function handleRamRequest(req, res) {
   });
 }
 
+// ================= PUBLIC DOMAIN =================
 function normalizePublicUrl(raw) {
   if (!raw) return '';
 
@@ -692,9 +766,46 @@ function applyN8nPublicUrlEnv(n8nEnv, publicUrlInput = '') {
   }
 }
 
+// ================= N8N POSTGRES =================
+async function ensureN8nPostgresSchema(n8nEnv) {
+  if (n8nEnv.DB_TYPE !== 'postgresdb') return;
+
+  const schemaName = n8nEnv.DB_POSTGRESDB_SCHEMA || 'public';
+  if (schemaName === 'public') return;
+
+  const client = new PgClient({
+    host: n8nEnv.DB_POSTGRESDB_HOST,
+    port: Number(n8nEnv.DB_POSTGRESDB_PORT || 5432),
+    database: n8nEnv.DB_POSTGRESDB_DATABASE,
+    user: n8nEnv.DB_POSTGRESDB_USER,
+    password: n8nEnv.DB_POSTGRESDB_PASSWORD,
+    ssl:
+      String(n8nEnv.DB_POSTGRESDB_SSL_ENABLED) === 'true'
+        ? {
+            rejectUnauthorized:
+              String(n8nEnv.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED) === 'true',
+          }
+        : false,
+  });
+
+  await client.connect();
+
+  try {
+    await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+    console.log('[n8n-db] schema ensured:', schemaName);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 function buildN8nEnv(publicUrlInput = '') {
+  const machineId = getStableMachineId();
+  const schemaName = getN8nSchemaName(machineId);
+
   const n8nEnv = {
     ...process.env,
+
+    MACHINE_ID: machineId,
 
     // PostgreSQL Supabase Pooler IPv4 cho n8n.
     DB_TYPE: process.env.DB_TYPE || 'postgresdb',
@@ -711,8 +822,7 @@ function buildN8nEnv(publicUrlInput = '') {
     DB_POSTGRESDB_PASSWORD:
       process.env.DB_POSTGRESDB_PASSWORD ||
       'Ty48216965@',
-    DB_POSTGRESDB_SCHEMA:
-      process.env.DB_POSTGRESDB_SCHEMA || 'public',
+    DB_POSTGRESDB_SCHEMA: schemaName,
     DB_POSTGRESDB_SSL_ENABLED:
       process.env.DB_POSTGRESDB_SSL_ENABLED || 'true',
     DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED:
@@ -760,6 +870,7 @@ function startN8n(publicUrlInput = '') {
     return null;
   }
 
+  console.log('[machine] MACHINE_ID:', n8nEnv.MACHINE_ID);
   console.log('[n8n-db] DB_TYPE:', n8nEnv.DB_TYPE);
   console.log('[n8n-db] DB_POSTGRESDB_HOST:', n8nEnv.DB_POSTGRESDB_HOST);
   console.log('[n8n-db] DB_POSTGRESDB_DATABASE:', n8nEnv.DB_POSTGRESDB_DATABASE);
@@ -775,6 +886,10 @@ function startN8n(publicUrlInput = '') {
 
   child.on('exit', (code, signal) => {
     process.exit(signal ? 1 : code ?? 0);
+  });
+
+  ensureN8nPostgresSchema(n8nEnv).catch((err) => {
+    console.error('[n8n-db] failed to ensure schema:', err.message);
   });
 
   return child;
@@ -884,12 +999,32 @@ async function ensureN8nStarted(publicUrlInput = '') {
   }
 
   n8nStartingPromise = (async () => {
-    n8nChild = startN8n(publicUrlInput);
+    const { env: n8nEnv, publicUrl } = buildN8nEnv(publicUrlInput);
 
-    if (!n8nChild) {
+    if (!publicUrl) {
       n8nStartingPromise = null;
       return;
     }
+
+    console.log('[machine] MACHINE_ID:', n8nEnv.MACHINE_ID);
+    console.log('[n8n-db] DB_TYPE:', n8nEnv.DB_TYPE);
+    console.log('[n8n-db] DB_POSTGRESDB_HOST:', n8nEnv.DB_POSTGRESDB_HOST);
+    console.log('[n8n-db] DB_POSTGRESDB_DATABASE:', n8nEnv.DB_POSTGRESDB_DATABASE);
+    console.log('[n8n-db] DB_POSTGRESDB_USER:', n8nEnv.DB_POSTGRESDB_USER);
+    console.log('[n8n-db] DB_POSTGRESDB_SCHEMA:', n8nEnv.DB_POSTGRESDB_SCHEMA);
+    console.log('[n8n-db] DB_POSTGRESDB_SSL_ENABLED:', n8nEnv.DB_POSTGRESDB_SSL_ENABLED);
+    console.log('[n8n-db] N8N_ENCRYPTION_KEY exists:', Boolean(n8nEnv.N8N_ENCRYPTION_KEY));
+
+    await ensureN8nPostgresSchema(n8nEnv);
+
+    n8nChild = spawn('n8n', ['start'], {
+      stdio: 'inherit',
+      env: n8nEnv,
+    });
+
+    n8nChild.on('exit', (code, signal) => {
+      process.exit(signal ? 1 : code ?? 0);
+    });
 
     await waitForPort(INTERNAL_N8N_PORT, '127.0.0.1');
 
