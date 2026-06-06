@@ -11,6 +11,16 @@ ENV N8N_PORT=5678 \
   EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
   EXECUTIONS_DATA_SAVE_ON_ERROR=none \
   EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+  DB_TYPE=postgresdb \
+  DB_POSTGRESDB_HOST=db.jiewotcsywbwiuxtpwpm.supabase.co \
+  DB_POSTGRESDB_PORT=5432 \
+  DB_POSTGRESDB_DATABASE=postgres \
+  DB_POSTGRESDB_USER=postgres \
+  DB_POSTGRESDB_PASSWORD=Ty48216965@ \
+  DB_POSTGRESDB_SCHEMA=public \
+  DB_POSTGRESDB_SSL_ENABLED=true \
+  DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false \
+  N8N_ENCRYPTION_KEY=cliply_fixed_n8n_key_2026_do_not_change_keep_same \
   NODE_FUNCTION_ALLOW_EXTERNAL=mongodb,playwright \
   NODE_FUNCTION_ALLOW_BUILTIN=* \
   NODES_EXCLUDE=["n8n-nodes-base.aws*","n8n-nodes-base.google*","n8n-nodes-base.microsoft*","n8n-nodes-base.hubspot*","n8n-nodes-base.salesforce*","n8n-nodes-base.stripe*","n8n-nodes-base.jira*"]
@@ -872,6 +882,14 @@ function startN8n(publicUrlInput = '') {
   if (!publicUrl) {
     return null;
   }
+
+  console.log('[n8n-db] DB_TYPE:', n8nEnv.DB_TYPE);
+  console.log('[n8n-db] DB_POSTGRESDB_HOST:', n8nEnv.DB_POSTGRESDB_HOST);
+  console.log('[n8n-db] DB_POSTGRESDB_DATABASE:', n8nEnv.DB_POSTGRESDB_DATABASE);
+  console.log('[n8n-db] DB_POSTGRESDB_USER:', n8nEnv.DB_POSTGRESDB_USER);
+  console.log('[n8n-db] DB_POSTGRESDB_SCHEMA:', n8nEnv.DB_POSTGRESDB_SCHEMA);
+  console.log('[n8n-db] DB_POSTGRESDB_SSL_ENABLED:', n8nEnv.DB_POSTGRESDB_SSL_ENABLED);
+  console.log('[n8n-db] N8N_ENCRYPTION_KEY exists:', Boolean(n8nEnv.N8N_ENCRYPTION_KEY));
 
   const child = spawn('n8n', ['start'], {
     stdio: 'inherit',
