@@ -7,6 +7,7 @@ ENV N8N_PORT=5678 \
     N8N_DIAGNOSTICS_ENABLED=false \
     N8N_RUNNERS_ENABLED=false \
     N8N_COMMUNITY_PACKAGES_ENABLED=false \
+    N8N_BLOCK_ENV_ACCESS_IN_NODE=false \
     EXECUTIONS_PROCESS=main \
     EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
     EXECUTIONS_DATA_SAVE_ON_ERROR=none \
@@ -800,12 +801,21 @@ async function ensureN8nPostgresSchema(n8nEnv) {
 
 function buildN8nEnv(publicUrlInput = '') {
   const machineId = getStableMachineId();
+  process.env.MACHINE_ID = machineId;
+  process.env.STABLE_MACHINE_ID = machineId;
+  process.env.APP_MACHINE_ID = machineId;
   const schemaName = getN8nSchemaName(machineId);
 
   const n8nEnv = {
     ...process.env,
 
     MACHINE_ID: machineId,
+    STABLE_MACHINE_ID: machineId,
+    APP_MACHINE_ID: machineId,
+
+    // Cho phép n8n Code node đọc env bằng $env/process.env
+    N8N_BLOCK_ENV_ACCESS_IN_NODE:
+      process.env.N8N_BLOCK_ENV_ACCESS_IN_NODE || 'false',
 
     // PostgreSQL Supabase Pooler IPv4 cho n8n.
     DB_TYPE: process.env.DB_TYPE || 'postgresdb',
@@ -871,6 +881,7 @@ function startN8n(publicUrlInput = '') {
   }
 
   console.log('[machine] MACHINE_ID:', n8nEnv.MACHINE_ID);
+  console.log('[machine] N8N_BLOCK_ENV_ACCESS_IN_NODE:', n8nEnv.N8N_BLOCK_ENV_ACCESS_IN_NODE);
   console.log('[n8n-db] DB_TYPE:', n8nEnv.DB_TYPE);
   console.log('[n8n-db] DB_POSTGRESDB_HOST:', n8nEnv.DB_POSTGRESDB_HOST);
   console.log('[n8n-db] DB_POSTGRESDB_DATABASE:', n8nEnv.DB_POSTGRESDB_DATABASE);
@@ -1007,6 +1018,7 @@ async function ensureN8nStarted(publicUrlInput = '') {
     }
 
     console.log('[machine] MACHINE_ID:', n8nEnv.MACHINE_ID);
+  console.log('[machine] N8N_BLOCK_ENV_ACCESS_IN_NODE:', n8nEnv.N8N_BLOCK_ENV_ACCESS_IN_NODE);
     console.log('[n8n-db] DB_TYPE:', n8nEnv.DB_TYPE);
     console.log('[n8n-db] DB_POSTGRESDB_HOST:', n8nEnv.DB_POSTGRESDB_HOST);
     console.log('[n8n-db] DB_POSTGRESDB_DATABASE:', n8nEnv.DB_POSTGRESDB_DATABASE);
