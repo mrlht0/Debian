@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM n8nio/n8n:2.22.4
+FROM mcr.microsoft.com/playwright:v1.56.1-noble
 
 ENV N8N_PORT=5678 \
     N8N_LISTEN_ADDRESS=127.0.0.1 \
@@ -44,12 +44,14 @@ RUN apt-get update \
       libgtk-3-0 \
       libgbm1 \
       libxss1 \
-      libasound2 \
+      libasound2t64 \
       dbus \
       udev \
       bash \
       curl \
     && rm -rf /var/lib/apt/lists/* \
+    && if ! id -u node >/dev/null 2>&1; then useradd -m -u 1000 -s /bin/bash node; fi \
+    && npm install -g --no-audit --no-fund n8n@2.22.4 \
     && npm init -y >/dev/null 2>&1 \
     && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg playwright-core
 
