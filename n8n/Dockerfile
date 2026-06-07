@@ -49,12 +49,11 @@ RUN apt-get update \
       bash \
       curl \
     && rm -rf /var/lib/apt/lists/* \
-    && if ! id -u node >/dev/null 2>&1; then useradd -m -s /bin/bash node; fi \
+    && if ! id -u node >/dev/null 2>&1; then useradd -m -u 1000 -s /bin/bash node; fi \
     && npm install -g --no-audit --no-fund n8n@2.22.4 \
     && npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund \
-       http-proxy mongoose mongodb pg playwright-core
-  
+    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg playwright-core
+
 RUN cat <<'EOF' > /app/server.js
 'use strict';
 
@@ -233,6 +232,10 @@ async function launchChromium(options = {}) {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--disable-software-rasterizer',
+      '--no-zygote',
+      '--disable-extensions',
+      '--disable-background-networking',
       '--window-size=1365,900',
     ],
     env: {
@@ -279,6 +282,10 @@ async function startAiStudioGui() {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--disable-software-rasterizer',
+      '--no-zygote',
+      '--disable-extensions',
+      '--disable-background-networking',
       '--window-size=1365,900',
     ],
   });
@@ -309,13 +316,11 @@ function inferEpisode(title) {
 }
 
 async function scrapeBilibiliToday(payload = {}) {
-  await ensureDesktopServices();
-
   const bilibiliUrl = payload.bilibiliUrl || process.env.BILIBILI_URL || 'https://www.bilibili.com/c/douga/?spm_id_from=333.1007.0.0';
   const maxVideos = Number(payload.maxVideos || process.env.MAX_BILIBILI_VIDEOS || 20);
   const runDate = payload.runDate || new Date().toISOString().slice(0, 10);
 
-  const browser = await launchChromium({ headless: String(process.env.SCRAPER_HEADLESS || 'false').toLowerCase() === 'true' });
+  const browser = await launchChromium({ headless: String(process.env.SCRAPER_HEADLESS || 'true').toLowerCase() !== 'false' });
   const page = await browser.newPage({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36',
     viewport: { width: 1365, height: 900 },
