@@ -36,6 +36,7 @@ RUN apt-get update \
       procps \
       novnc \
       websockify \
+      xterm \
       ca-certificates \
       fonts-liberation \
       fonts-noto \
@@ -113,6 +114,7 @@ let aiStudioGuiContext = null;
 let aiStudioGuiPage = null;
 let aiStudioChromeProcess = null;
 let aiStudioLastLaunchUsedCleanProfile = false;
+let fallbackXtermProcess = null;
 let xvfbProcess = null;
 let fluxboxProcess = null;
 let x11vncProcess = null;
@@ -152,6 +154,15 @@ function isChildAlive(child) {
 
 async function waitMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCondition(check, timeoutMs = 5000, intervalMs = 250) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await check()) return true;
+    await waitMs(intervalMs);
+  }
+  return false;
 }
 
 function ensureDir(dirPath) {
@@ -326,6 +337,27 @@ async function ensureDesktopServices() {
 
   desktopStarted = true;
   console.log(`[desktop] services ready: DISPLAY=${DISPLAY_NUM}, VNC=${VNC_PORT}, noVNC=${NOVNC_PORT}`);
+}
+
+function ensureFallbackTerminal() {
+  if (isChildAlive(fallbackXtermProcess)) return;
+
+  fallbackXtermProcess = spawnManaged('desktop-xterm', 'xterm', [
+    '-geometry',
+    '120x30+40+40',
+    '-fa',
+    'Monospace',
+    '-fs',
+    '11',
+    '-title',
+    'AI Studio Desktop',
+    '-e',
+    'bash',
+    '-lc',
+    'echo "Desktop is ready."; echo "If Chrome crashes, inspect /tmp/aistudio-chrome.log"; tail -f /tmp/aistudio-chrome.log',
+  ], {
+    env: { ...process.env, DISPLAY: DISPLAY_NUM, HOME: '/home/node' },
+  });
 }
 
 function findPlaywrightBundledChromium() {
@@ -676,6 +708,7 @@ async function startAiStudioGui() {
     '--disable-renderer-backgrounding',
     '--disable-component-update',
     '--disable-sync',
+    '--disable-features=VizDisplayCompositor',
     '--window-size=1365,900',
     '--start-maximized',
     '--no-first-run',
@@ -719,7 +752,36 @@ async function startAiStudioGui() {
     aiStudioChromeProcess = null;
   });
 
-  await waitForProfileSettled(2500);
+  const stayedAlive = await waitForCondition(() => isChildAlive(aiStudioChromeProcess), 4000, 250);
+  await waitForProfileSettled(1500);
+
+  if (!stayedAlive || !isChildAlive(aiStudioChromeProcess)) {
+    console.error('[aistudio-chrome] exited too early, retrying once with clean runtime profile');
+    resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
+
+    aiStudioChromeProcess = spawnManaged('aistudio-chrome-retry', chromePath, [
+      ...chromeArgs.filter((arg) => !arg.startsWith('--user-data-dir=')),
+      `--user-data-dir=${AI_STUDIO_RUNTIME_PROFILE_DIR}`,
+    ], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: {
+        ...process.env,
+        DISPLAY: DISPLAY_NUM,
+        HOME: '/home/node',
+      },
+    });
+
+    aiStudioLastLaunchUsedCleanProfile = true;
+
+    const retryAlive = await waitForCondition(() => isChildAlive(aiStudioChromeProcess), 4000, 250);
+    await waitForProfileSettled(1500);
+
+    if (!retryAlive || !isChildAlive(aiStudioChromeProcess)) {
+      ensureFallbackTerminal();
+      throw new Error('Chrome did not stay alive on DISPLAY. Open noVNC and inspect /tmp/aistudio-chrome.log');
+    }
+  }
+
   startAiStudioProfileAutoSync();
 
   return {
@@ -2031,6 +2093,8 @@ const server = http.createServer(async (req, res) => {
       await startAiStudioGui();
     } catch (err) {
       console.error('[novnc] failed to auto-open AI Studio:', err.message);
+      sendJson(res, 500, { ok: false, error: err.message, logHint: '/tmp/aistudio-chrome.log' });
+      return;
     }
 
     res.writeHead(302, { Location: NOVNC_READY_PATH });
@@ -2052,6 +2116,7 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         console.error('[novnc] failed to auto-open AI Studio:', err.message);
         await ensureDesktopServices();
+        ensureFallbackTerminal();
       }
     } else {
       await ensureDesktopServices();
