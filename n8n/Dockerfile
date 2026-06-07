@@ -87,6 +87,7 @@ const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwr
 const AI_STUDIO_PROFILE_PARENT = path.dirname(AI_STUDIO_PROFILE_DIR);
 const AI_STUDIO_PROFILE_NAME = path.basename(AI_STUDIO_PROFILE_DIR);
 const AI_STUDIO_PROFILE_ARCHIVE = '/tmp/aistudio-profile-cache.tgz';
+const AI_STUDIO_RUNTIME_PROFILE_DIR = process.env.AI_STUDIO_RUNTIME_PROFILE_DIR || '/tmp/aistudio-profile-runtime';
 const AI_STUDIO_PROFILE_BACKUP_ENABLED = String(process.env.AI_STUDIO_PROFILE_BACKUP_ENABLED || 'true').toLowerCase() !== 'false';
 const AI_STUDIO_PROFILE_SYNC_INTERVAL_MS = Number(process.env.AI_STUDIO_PROFILE_SYNC_INTERVAL_MS || 120000);
 const AI_STUDIO_PROFILE_BACKUP_KEY = process.env.AI_STUDIO_PROFILE_BACKUP_KEY || '';
@@ -111,6 +112,7 @@ let desktopStarted = false;
 let aiStudioGuiContext = null;
 let aiStudioGuiPage = null;
 let aiStudioChromeProcess = null;
+let aiStudioLastLaunchUsedCleanProfile = false;
 let xvfbProcess = null;
 let fluxboxProcess = null;
 let x11vncProcess = null;
@@ -150,6 +152,21 @@ function isChildAlive(child) {
 
 async function waitMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function resetDir(dirPath) {
+  fs.rmSync(dirPath, { recursive: true, force: true });
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function copyDirContents(sourceDir, targetDir) {
+  if (!fs.existsSync(sourceDir)) return;
+  ensureDir(targetDir);
+  fs.cpSync(sourceDir, targetDir, { recursive: true, force: true });
 }
 
 function shellOk(command) {
@@ -597,6 +614,7 @@ async function startAiStudioGui() {
   }
 
   fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
+  resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
 
   // Quan trọng: nếu Chrome đang chạy thì KHÔNG restore profile nữa.
   // Restore đè lên profile đang đăng nhập có thể làm AI Studio/Google session lỗi trang
@@ -624,21 +642,53 @@ async function startAiStudioGui() {
     }));
   }
 
+  let runtimeProfileSource = AI_STUDIO_PROFILE_DIR;
+  if (hasProfileFiles()) {
+    try {
+      copyDirContents(AI_STUDIO_PROFILE_DIR, AI_STUDIO_RUNTIME_PROFILE_DIR);
+      runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
+    } catch (err) {
+      console.error('[aistudio-profile] failed to prepare runtime profile copy:', err.message);
+      runtimeProfileSource = AI_STUDIO_PROFILE_DIR;
+    }
+  } else {
+    runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
+  }
+
+  const useCleanProfile = String(process.env.AI_STUDIO_FORCE_CLEAN_PROFILE || 'false').toLowerCase() === 'true';
+  if (useCleanProfile) {
+    resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
+    runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
+  }
+
   const chromeArgs = [
-    `--user-data-dir=${AI_STUDIO_PROFILE_DIR}`,
+    `--user-data-dir=${runtimeProfileSource}`,
     '--profile-directory=Default',
     '--no-sandbox',
+    '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-software-rasterizer',
+    '--disable-features=RendererCodeIntegrity,SitePerProcess,UseSkiaRenderer,OptimizationHints,MediaRouter,Translate,PushMessaging',
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-component-update',
+    '--disable-sync',
     '--window-size=1365,900',
     '--start-maximized',
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-features=OptimizationHints,MediaRouter,Translate,PushMessaging',
+    '--disable-extensions-except=',
     '--disable-extensions',
     '--disable-crash-reporter',
     '--disable-breakpad',
     '--password-store=basic',
     '--use-mock-keychain',
+    '--test-type',
+    '--enable-logging=stderr',
+    '--v=1',
     '--lang=en-US',
     AI_STUDIO_APP_URL,
   ];
@@ -654,7 +704,17 @@ async function startAiStudioGui() {
     },
   });
 
+  aiStudioLastLaunchUsedCleanProfile = useCleanProfile;
+
   aiStudioChromeProcess.on('exit', () => {
+    if (fs.existsSync(AI_STUDIO_RUNTIME_PROFILE_DIR) && !aiStudioLastLaunchUsedCleanProfile) {
+      try {
+        resetDir(AI_STUDIO_PROFILE_DIR);
+        copyDirContents(AI_STUDIO_RUNTIME_PROFILE_DIR, AI_STUDIO_PROFILE_DIR);
+      } catch (err) {
+        console.error('[aistudio-profile] failed to sync runtime profile back:', err.message);
+      }
+    }
     backupAiStudioProfileToDb('chrome_exit').catch(() => {});
     aiStudioChromeProcess = null;
   });
