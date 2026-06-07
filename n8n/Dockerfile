@@ -378,27 +378,91 @@ async function scrapeBilibiliToday(payload = {}) {
       function absUrl(href) {
         try { return new URL(href, location.origin).href; } catch { return ''; }
       }
-      function textOf(el) {
-        return (el?.innerText || el?.textContent || el?.getAttribute?.('title') || '').trim();
+
+      function cleanText(value) {
+        return String(value || '')
+          .replace(/\s+/g, ' ')
+          .replace(/[\u200b\u200c\u200d]/g, '')
+          .trim();
       }
 
-      return [...document.querySelectorAll('a[href*="/video/"], a[href*="bilibili.com/video/"]')]
+      function textOf(el) {
+        if (!el) return '';
+        return cleanText(
+          el.getAttribute?.('title') ||
+          el.getAttribute?.('aria-label') ||
+          el.innerText ||
+          el.textContent ||
+          ''
+        );
+      }
+
+      function validTitle(title) {
+        const s = cleanText(title);
+        if (!s) return '';
+        // Loại các chuỗi thống kê/thời lượng kiểu: 36.3万 142 00:11
+        if (/^[\d.]+\s*[万萬]?\s+\d+\s+\d{1,2}:?\d{2}$/.test(s)) return '';
+        if (/^[\d.]+\s*[万萬]\s*\d*\s*\d*:?[\d]*$/.test(s)) return '';
+        if (/^\d{1,2}:\d{2}$/.test(s)) return '';
+        if (s.length < 4) return '';
+        return s;
+      }
+
+      function pickTitle(a, card) {
+        const candidates = [
+          a.getAttribute?.('title'),
+          a.getAttribute?.('aria-label'),
+          a.querySelector?.('.bili-video-card__info--tit')?.getAttribute?.('title'),
+          a.querySelector?.('.bili-video-card__info--tit')?.textContent,
+          a.querySelector?.('.video-name')?.textContent,
+          a.querySelector?.('.title')?.textContent,
+          card?.querySelector?.('.bili-video-card__info--tit')?.getAttribute?.('title'),
+          card?.querySelector?.('.bili-video-card__info--tit')?.textContent,
+          card?.querySelector?.('.video-name')?.textContent,
+          card?.querySelector?.('.title')?.textContent,
+          card?.querySelector?.('img[alt]')?.getAttribute?.('alt'),
+          card?.querySelector?.('[title]')?.getAttribute?.('title'),
+        ];
+
+        for (const c of candidates) {
+          const title = validTitle(c);
+          if (title) return title;
+        }
+
+        const lines = cleanText(card?.innerText || card?.textContent || '')
+          .split(/\n+/)
+          .map(validTitle)
+          .filter(Boolean);
+
+        return lines.find(line => !/播放|弹幕|评论|收藏|分享/.test(line)) || '';
+      }
+
+      const anchors = [...document.querySelectorAll('a[href*="/video/BV"], a[href*="bilibili.com/video/BV"]')];
+
+      return anchors
         .map((a) => {
-          const source_url = absUrl(a.getAttribute('href') || a.href || '');
-          const match = source_url.match(/BV[a-zA-Z0-9]+/);
+          const rawUrl = absUrl(a.getAttribute('href') || a.href || '');
+          const match = rawUrl.match(/BV[a-zA-Z0-9]+/);
           if (!match) return null;
 
-          const card = a.closest('.video-card, .bili-video-card, .feed-card, .card-box, .bili-video-card__wrap, li, div') || a.parentElement;
-          const title = textOf(a) || textOf(card?.querySelector?.('.title')) || textOf(card?.querySelector?.('[title]')) || '';
-          const cardText = textOf(card);
-          const thumbnail = card?.querySelector?.('img')?.src || '';
+          const bvid = match[0];
+          const source_url = `https://www.bilibili.com/video/${bvid}`;
+          const card =
+            a.closest('.bili-video-card, .bili-video-card__wrap, .video-card, .feed-card, .card-box, li') ||
+            a.parentElement;
+          const original_title = pickTitle(a, card);
+          if (!original_title) return null;
+
+          const img = card?.querySelector?.('img') || a.querySelector?.('img');
+          const thumbnail_url = img?.currentSrc || img?.src || img?.getAttribute?.('data-src') || '';
+          const card_text = cleanText(card?.innerText || card?.textContent || '');
 
           return {
-            bvid: match[0],
+            bvid,
             source_url,
-            original_title: title || cardText.split('\n')[0] || '',
-            card_text: cardText,
-            thumbnail_url: thumbnail,
+            original_title,
+            card_text,
+            thumbnail_url,
           };
         })
         .filter(Boolean);
