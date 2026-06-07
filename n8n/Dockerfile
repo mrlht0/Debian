@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM n8nio/n8n:2.22.4
+FROM mcr.microsoft.com/playwright:v1.56.1-noble
 
 ENV N8N_PORT=5678 \
     N8N_LISTEN_ADDRESS=127.0.0.1 \
@@ -27,26 +27,34 @@ ENV N8N_PORT=5678 \
 WORKDIR /app
 USER root
 
-RUN apk add --no-cache \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       xvfb \
       fluxbox \
       x11vnc \
       novnc \
       websockify \
-      chromium \
-      nss \
-      freetype \
-      harfbuzz \
-      ttf-freefont \
-      font-noto \
-      font-noto-cjk \
+      ca-certificates \
+      fonts-liberation \
+      fonts-noto \
+      fonts-noto-cjk \
+      libnss3 \
+      libatk-bridge2.0-0 \
+      libgtk-3-0 \
+      libgbm1 \
+      libxss1 \
+      libasound2t64 \
       dbus \
       udev \
       bash \
       curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && if ! id -u node >/dev/null 2>&1; then useradd -m -s /bin/bash node; fi \
+    && npm install -g --no-audit --no-fund n8n@2.22.4 \
     && npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg playwright-core
-
+    && npm install --no-package-lock --no-save --no-audit --no-fund \
+       http-proxy mongoose mongodb pg playwright-core
+  
 RUN cat <<'EOF' > /app/server.js
 'use strict';
 
@@ -65,7 +73,8 @@ const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
 const DISPLAY_NUM = process.env.DISPLAY || ':99';
 const NOVNC_PORT = Number(process.env.NOVNC_INTERNAL_PORT || 6080);
 const VNC_PORT = Number(process.env.VNC_INTERNAL_PORT || 5900);
-const CHROME_BIN = process.env.CHROME_BIN || '/usr/bin/chromium-browser';
+const CHROME_BIN = process.env.CHROME_BIN || '';
+
 const AI_STUDIO_APP_URL = process.env.AI_STUDIO_APP_URL || 'https://ai.studio/apps/4c2ff89f-3309-4c2c-9613-3058239f23b3';
 const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwright/ai-studio-profile';
 
@@ -169,26 +178,56 @@ async function ensureDesktopServices() {
   console.log(`[desktop] Xvfb/noVNC ready: DISPLAY=${DISPLAY_NUM}, internal noVNC=${NOVNC_PORT}`);
 }
 
+function findPlaywrightBundledChromium() {
+  const roots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    '/ms-playwright',
+  ].filter(Boolean);
+
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+
+      const dirs = fs.readdirSync(root).filter((name) => name.startsWith('chromium'));
+      for (const dir of dirs) {
+        const candidates = [
+          path.join(root, dir, 'chrome-linux', 'chrome'),
+          path.join(root, dir, 'chrome-linux-headless-shell', 'headless_shell'),
+        ];
+
+        for (const candidate of candidates) {
+          if (fs.existsSync(candidate)) return candidate;
+        }
+      }
+    } catch {}
+  }
+
+  return '';
+}
+
 function getChromiumExecutablePath() {
   const candidates = [
     CHROME_BIN,
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
     '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    findPlaywrightBundledChromium(),
   ];
 
   for (const candidate of candidates) {
     if (candidate && fs.existsSync(candidate)) return candidate;
   }
 
-  return CHROME_BIN;
+  return '';
 }
 
 async function launchChromium(options = {}) {
   const { chromium } = require('playwright-core');
+  const executablePath = getChromiumExecutablePath();
+
   return chromium.launch({
     headless: options.headless ?? false,
-    executablePath: getChromiumExecutablePath(),
+    ...(executablePath ? { executablePath } : {}),
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -224,9 +263,11 @@ async function startAiStudioGui() {
     };
   }
 
+  const executablePath = getChromiumExecutablePath();
+
   aiStudioGuiContext = await chromium.launchPersistentContext(AI_STUDIO_PROFILE_DIR, {
     headless: false,
-    executablePath: getChromiumExecutablePath(),
+    ...(executablePath ? { executablePath } : {}),
     viewport: { width: 1365, height: 900 },
     acceptDownloads: true,
     env: {
@@ -1429,6 +1470,11 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/websockify' || url.pathname.startsWith('/novnc/')) {
     await ensureDesktopServices();
+
+    if (url.pathname.startsWith('/novnc/')) {
+      req.url = req.url.replace(/^\/novnc/, '') || '/';
+    }
+
     novncProxy.web(req, res);
     return;
   }
@@ -1531,7 +1577,8 @@ process.on('SIGINT', () => shutdown(0));
 })();
 EOF
 
-RUN chown -R node:node /app /home/node
+RUN mkdir -p /data/playwright /app/temp_uploads \
+    && chown -R node:node /app /home/node /data
 
 USER node
 
