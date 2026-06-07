@@ -27,23 +27,29 @@ ENV N8N_PORT=5678 \
 WORKDIR /app
 USER root
 
-RUN apk add --no-cache \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       xvfb \
       fluxbox \
       x11vnc \
       novnc \
       websockify \
       chromium \
-      nss \
-      freetype \
-      harfbuzz \
-      ttf-freefont \
-      font-noto \
-      font-noto-cjk \
+      ca-certificates \
+      fonts-liberation \
+      fonts-noto \
+      fonts-noto-cjk \
+      libnss3 \
+      libatk-bridge2.0-0 \
+      libgtk-3-0 \
+      libgbm1 \
+      libxss1 \
+      libasound2 \
       dbus \
       udev \
       bash \
       curl \
+    && rm -rf /var/lib/apt/lists/* \
     && npm init -y >/dev/null 2>&1 \
     && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg playwright-core
 
@@ -65,7 +71,7 @@ const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
 const DISPLAY_NUM = process.env.DISPLAY || ':99';
 const NOVNC_PORT = Number(process.env.NOVNC_INTERNAL_PORT || 6080);
 const VNC_PORT = Number(process.env.VNC_INTERNAL_PORT || 5900);
-const CHROME_BIN = process.env.CHROME_BIN || '/usr/bin/chromium-browser';
+const CHROME_BIN = process.env.CHROME_BIN || '/usr/bin/chromium';
 const AI_STUDIO_APP_URL = process.env.AI_STUDIO_APP_URL || 'https://ai.studio/apps/4c2ff89f-3309-4c2c-9613-3058239f23b3';
 const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwright/ai-studio-profile';
 
@@ -1429,6 +1435,11 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/websockify' || url.pathname.startsWith('/novnc/')) {
     await ensureDesktopServices();
+
+    if (url.pathname.startsWith('/novnc/')) {
+      req.url = req.url.replace(/^\/novnc/, '') || '/';
+    }
+
     novncProxy.web(req, res);
     return;
   }
@@ -1531,7 +1542,8 @@ process.on('SIGINT', () => shutdown(0));
 })();
 EOF
 
-RUN chown -R node:node /app /home/node
+RUN mkdir -p /data/playwright /app/temp_uploads \
+    && chown -R node:node /app /home/node /data
 
 USER node
 
