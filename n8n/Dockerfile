@@ -27,8 +27,20 @@ ENV N8N_PORT=5678 \
 WORKDIR /app
 USER root
 
+RUN if command -v apk >/dev/null 2>&1; then \
+      apk add --no-cache xvfb dbus ttf-freefont nss freetype harfbuzz ca-certificates udev; \
+    elif command -v apt-get >/dev/null 2>&1; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        xvfb dbus-x11 fonts-liberation libnss3 libatk-bridge2.0-0 libgtk-3-0 \
+        libxss1 libasound2 libgbm1 libxshmfence1 ca-certificates \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 RUN npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg
+    && npm install --no-package-lock --no-save --no-audit --no-fund \
+       http-proxy mongoose mongodb pg express socket.io playwright playwright-extra puppeteer-extra-plugin-stealth \
+    && npx playwright install chromium
+
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -38,8 +50,25 @@ const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const { execSync, spawn } = require('node:child_process');
+const path = require('node:path');
 const httpProxy = require('http-proxy');
+const { Server: SocketIOServer } = require('socket.io');
 const { Client: PgClient } = require('pg');
+
+let chromium = null;
+try {
+  const pwExtra = require('playwright-extra');
+  const stealth = require('puppeteer-extra-plugin-stealth')();
+  pwExtra.chromium.use(stealth);
+  chromium = pwExtra.chromium;
+} catch (err) {
+  console.warn('[playwright] playwright-extra unavailable, fallback to playwright:', err.message);
+  try {
+    chromium = require('playwright').chromium;
+  } catch (fallbackErr) {
+    console.warn('[playwright] unavailable:', fallbackErr.message);
+  }
+}
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
 const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
@@ -906,6 +935,540 @@ function startN8n(publicUrlInput = '') {
   return child;
 }
 
+
+
+// ================= VIRTUAL DISPLAY =================
+let xvfbChild = null;
+
+function ensureVirtualDisplayStarted() {
+  if (process.env.DISPLAY) return;
+
+  process.env.DISPLAY = ':99';
+
+  try {
+    xvfbChild = spawn('Xvfb', [
+      ':99',
+      '-screen',
+      '0',
+      '1365x900x24',
+      '-ac',
+      '+extension',
+      'RANDR',
+    ], {
+      stdio: 'ignore',
+      detached: true,
+    });
+
+    xvfbChild.unref();
+    console.log('[xvfb] started on DISPLAY=:99');
+  } catch (err) {
+    console.warn('[xvfb] could not start:', err.message);
+  }
+}
+
+// ================= PLAYWRIGHT APIs =================
+const REMOTE_BROWSER_DIR = process.env.REMOTE_BROWSER_DIR || '/data/playwright/ai-studio-profile';
+const REMOTE_UPLOAD_DIR = process.env.REMOTE_UPLOAD_DIR || '/tmp/remote-browser-uploads';
+const AI_STUDIO_APP_URL =
+  process.env.AI_STUDIO_APP_URL ||
+  'https://ai.studio/apps/4c2ff89f-3309-4c2c-9613-3058239f23b3';
+
+let io = null;
+let remoteContext = null;
+let remotePage = null;
+let remoteCdpClient = null;
+let pendingFileChooser = null;
+
+function readJsonBody(req, limitBytes = 10 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    let size = 0;
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limitBytes) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      body += chunk.toString('utf8');
+    });
+
+    req.on('end', () => {
+      if (!body.trim()) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(body));
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    req.on('error', reject);
+  });
+}
+
+function cleanBilibiliTitle(title) {
+  return String(title || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\\/:*?"<>|]/g, '')
+    .trim();
+}
+
+function inferBilibiliEpisode(title) {
+  const text = String(title || '');
+  const match =
+    text.match(/第\s*([0-9一二三四五六七八九十百千万]+)\s*[集话話回]/) ||
+    text.match(/EP\.?\s*(\d+)/i) ||
+    text.match(/E(?:pisode)?\s*(\d+)/i);
+
+  return match ? String(match[1]) : '';
+}
+
+async function scrapeBilibiliToday(options = {}) {
+  if (!chromium) {
+    throw new Error('Playwright is not installed or could not be loaded');
+  }
+
+  const runDate =
+    options.runDate ||
+    new Date().toISOString().slice(0, 10);
+
+  const bilibiliUrl =
+    options.bilibiliUrl ||
+    process.env.BILIBILI_URL ||
+    'https://www.bilibili.com/c/douga/?spm_id_from=333.1007.0.0';
+
+  const maxVideos = Number(
+    options.maxVideos ||
+    process.env.MAX_BILIBILI_VIDEOS ||
+    20
+  );
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
+
+  try {
+    const page = await browser.newPage({
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36',
+      viewport: {
+        width: 1365,
+        height: 900,
+      },
+    });
+
+    await page.goto(bilibiliUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 90000,
+    });
+
+    await page.waitForTimeout(6000);
+
+    try {
+      await page.mouse.wheel(0, 2400);
+      await page.waitForTimeout(2500);
+    } catch {}
+
+    const rows = await page.evaluate(() => {
+      function absUrl(href) {
+        try {
+          return new URL(href, location.origin).href;
+        } catch {
+          return '';
+        }
+      }
+
+      function textOf(el) {
+        return (
+          el?.innerText ||
+          el?.textContent ||
+          el?.getAttribute?.('title') ||
+          ''
+        ).trim();
+      }
+
+      return [
+        ...document.querySelectorAll(
+          'a[href*="/video/"], a[href*="bilibili.com/video/"]'
+        ),
+      ]
+        .map((a) => {
+          const source_url = absUrl(a.getAttribute('href') || a.href || '');
+          const match = source_url.match(/BV[a-zA-Z0-9]+/);
+
+          if (!match) return null;
+
+          const card =
+            a.closest(
+              '.video-card, .bili-video-card, .feed-card, .card-box, .bili-video-card__wrap, li, div'
+            ) || a.parentElement;
+
+          const title =
+            textOf(a) ||
+            textOf(card?.querySelector?.('.title')) ||
+            textOf(card?.querySelector?.('[title]')) ||
+            '';
+
+          const cardText = textOf(card);
+          const img = card?.querySelector?.('img');
+          const thumbnail =
+            img?.src ||
+            img?.getAttribute?.('data-src') ||
+            img?.getAttribute?.('src') ||
+            '';
+
+          return {
+            bvid: match[0],
+            source_url,
+            original_title: title || cardText.split('\n')[0] || '',
+            card_text: cardText,
+            thumbnail_url: thumbnail,
+          };
+        })
+        .filter(Boolean);
+    });
+
+    const seen = new Set();
+
+    return rows
+      .filter((item) => {
+        if (!item.bvid || !item.original_title) return false;
+        if (seen.has(item.bvid)) return false;
+        seen.add(item.bvid);
+        return true;
+      })
+      .slice(0, maxVideos)
+      .map((item) => {
+        const original = cleanBilibiliTitle(item.original_title);
+        const episode = inferBilibiliEpisode(original);
+
+        return {
+          run_date: runDate,
+          unique_key: `${item.bvid}_${episode || 'unknown'}`,
+          bvid: item.bvid,
+          episode,
+          original_title: original,
+          processed_title_vi: `VI - ${original}`,
+          processed_title_en: `EN - ${original}`,
+          processed_title_ja: `JP - ${original}`,
+          source_url: item.source_url,
+          thumbnail_url: item.thumbnail_url,
+          card_text: item.card_text,
+          download_url: '',
+          manual_file_path: '',
+          download_path: '',
+          processed_path: '',
+          preview_url: '',
+          status: 'FOUND_TODAY',
+          platforms: '',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          error: '',
+        };
+      });
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+async function handleScrapeBilibiliRequest(req, res) {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+    const body = req.method === 'POST' ? await readJsonBody(req) : {};
+
+    const rows = await scrapeBilibiliToday({
+      runDate: body.runDate || url.searchParams.get('runDate'),
+      bilibiliUrl: body.bilibiliUrl || url.searchParams.get('url'),
+      maxVideos: body.maxVideos || url.searchParams.get('maxVideos'),
+    });
+
+    sendJson(res, 200, {
+      ok: true,
+      count: rows.length,
+      rows,
+    });
+  } catch (err) {
+    sendJson(res, 500, {
+      ok: false,
+      error: err.message,
+    });
+  }
+}
+
+function sendRemotePage(res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+  });
+
+  res.end(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Remote Playwright Browser</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body { margin:0; background:#202124; color:#e8eaed; font-family:Arial,sans-serif; overflow:hidden; }
+    .bar { height:36px; display:flex; align-items:center; gap:12px; padding:0 12px; background:#303134; font-size:13px; }
+    .bar a { color:#8ab4f8; }
+    #screen { width:100vw; height:calc(100vh - 36px); object-fit:contain; display:block; background:#111; outline:none; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <b>Remote Playwright Browser</b>
+    <span>Click vào màn hình để điều khiển. Upload file sẽ mở file picker máy bạn.</span>
+    <a href="/api/remote/open" target="_blank">open/reload AI Studio</a>
+  </div>
+  <img id="screen" tabindex="0" draggable="false" />
+  <input id="fileInput" type="file" style="display:none" />
+  <script>
+    const socket = io();
+    const screen = document.getElementById('screen');
+    const fileInput = document.getElementById('fileInput');
+    let waitingFile = false;
+
+    function focusScreen() { screen.focus(); }
+    document.body.addEventListener('click', focusScreen);
+    screen.addEventListener('load', focusScreen);
+
+    socket.on('sync-render-image', (data) => {
+      screen.src = 'data:image/jpeg;base64,' + data.image;
+    });
+
+    socket.on('request-file-upload', (data) => {
+      if (data.multiple) fileInput.setAttribute('multiple', 'multiple');
+      else fileInput.removeAttribute('multiple');
+      waitingFile = true;
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', async (event) => {
+      if (!waitingFile) return;
+      const files = Array.from(event.target.files || []);
+
+      if (!files.length) {
+        socket.emit('cancel-file-upload');
+        waitingFile = false;
+        return;
+      }
+
+      const payload = [];
+      for (const file of files) {
+        const buffer = await file.arrayBuffer();
+        payload.push({ name: file.name, data: buffer });
+      }
+
+      socket.emit('upload-file-data', payload);
+      waitingFile = false;
+      fileInput.value = '';
+    });
+
+    function coords(e) {
+      const rect = screen.getBoundingClientRect();
+      const scaleX = screen.naturalWidth / rect.width;
+      const scaleY = screen.naturalHeight / rect.height;
+      return {
+        x: Math.round((e.clientX - rect.left) * scaleX),
+        y: Math.round((e.clientY - rect.top) * scaleY),
+      };
+    }
+
+    function buttonName(button) {
+      return button === 2 ? 'right' : button === 1 ? 'middle' : 'left';
+    }
+
+    screen.addEventListener('mousemove', (e) => socket.emit('ui-action', { type:'mouse-move', ...coords(e) }));
+    screen.addEventListener('mousedown', (e) => socket.emit('ui-action', { type:'mouse-down', ...coords(e), button: buttonName(e.button) }));
+    screen.addEventListener('mouseup', (e) => socket.emit('ui-action', { type:'mouse-up', ...coords(e), button: buttonName(e.button) }));
+    screen.addEventListener('wheel', (e) => {
+      socket.emit('ui-action', { type:'scroll', deltaX:e.deltaX, deltaY:e.deltaY });
+      e.preventDefault();
+    }, { passive:false });
+    screen.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    screen.addEventListener('keydown', (e) => {
+      socket.emit('ui-action', { type:'key-down', key:e.key });
+      if (!['Tab','Meta','Control','Alt','Shift'].includes(e.key)) e.preventDefault();
+    });
+
+    screen.addEventListener('keyup', (e) => {
+      socket.emit('ui-action', { type:'key-up', key:e.key });
+      if (!['Tab','Meta','Control','Alt','Shift'].includes(e.key)) e.preventDefault();
+    });
+  </script>
+</body>
+</html>`);
+}
+
+async function ensureRemoteBrowserStarted() {
+  ensureVirtualDisplayStarted();
+
+  if (!chromium) {
+    throw new Error('Playwright is not installed or could not be loaded');
+  }
+
+  if (remotePage && !remotePage.isClosed()) {
+    return remotePage;
+  }
+
+  fs.mkdirSync(REMOTE_BROWSER_DIR, { recursive: true });
+  fs.mkdirSync(REMOTE_UPLOAD_DIR, { recursive: true });
+
+  remoteContext = await chromium.launchPersistentContext(REMOTE_BROWSER_DIR, {
+    headless: false,
+    viewport: {
+      width: 1280,
+      height: 800,
+    },
+    acceptDownloads: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--start-maximized',
+      '--disable-gpu',
+    ],
+  });
+
+  remotePage = remoteContext.pages()[0] || await remoteContext.newPage();
+
+  remotePage.on('filechooser', async (fileChooser) => {
+    pendingFileChooser = fileChooser;
+    if (io) {
+      io.emit('request-file-upload', {
+        multiple: fileChooser.isMultiple(),
+      });
+    }
+  });
+
+  remoteCdpClient = await remotePage.context().newCDPSession(remotePage);
+  await remoteCdpClient.send('Page.startScreencast', {
+    format: 'jpeg',
+    quality: 60,
+    everyNthFrame: 1,
+  });
+
+  remoteCdpClient.on('Page.screencastFrame', async (frame) => {
+    if (io) {
+      io.emit('sync-render-image', {
+        image: frame.data,
+      });
+    }
+
+    try {
+      await remoteCdpClient.send('Page.screencastFrameAck', {
+        sessionId: frame.sessionId,
+      });
+    } catch {}
+  });
+
+  await remotePage.goto(AI_STUDIO_APP_URL, {
+    waitUntil: 'domcontentloaded',
+    timeout: 120000,
+  });
+
+  return remotePage;
+}
+
+async function handleRemoteOpen(req, res) {
+  try {
+    await ensureRemoteBrowserStarted();
+    sendJson(res, 200, {
+      ok: true,
+      remoteUrl: '/remote',
+      aiStudioAppUrl: AI_STUDIO_APP_URL,
+      profileDir: REMOTE_BROWSER_DIR,
+    });
+  } catch (err) {
+    sendJson(res, 500, {
+      ok: false,
+      error: err.message,
+    });
+  }
+}
+
+function setupRemoteSockets(server) {
+  io = new SocketIOServer(server, {
+    cors: {
+      origin: '*',
+    },
+    maxHttpBufferSize: 50 * 1024 * 1024,
+  });
+
+  io.on('connection', (socket) => {
+    console.log('[remote] socket connected');
+
+    ensureRemoteBrowserStarted().catch((err) => {
+      console.error('[remote] start failed:', err.message);
+    });
+
+    socket.on('cancel-file-upload', () => {
+      pendingFileChooser = null;
+    });
+
+    socket.on('upload-file-data', async (filesData) => {
+      try {
+        const paths = [];
+
+        for (const file of filesData || []) {
+          const safeName = path.basename(String(file.name || `upload_${Date.now()}`));
+          const filePath = path.join(REMOTE_UPLOAD_DIR, safeName);
+          fs.writeFileSync(filePath, Buffer.from(file.data));
+          paths.push(filePath);
+        }
+
+        if (pendingFileChooser) {
+          await pendingFileChooser.setFiles(paths);
+          pendingFileChooser = null;
+        }
+      } catch (err) {
+        console.error('[remote] upload failed:', err.message);
+      }
+    });
+
+    socket.on('ui-action', async (action) => {
+      try {
+        if (!remotePage || remotePage.isClosed()) return;
+
+        switch (action.type) {
+          case 'mouse-move':
+            await remotePage.mouse.move(action.x, action.y);
+            break;
+          case 'mouse-down':
+            await remotePage.mouse.move(action.x, action.y);
+            await remotePage.mouse.down({ button: action.button || 'left' });
+            break;
+          case 'mouse-up':
+            await remotePage.mouse.move(action.x, action.y);
+            await remotePage.mouse.up({ button: action.button || 'left' });
+            break;
+          case 'scroll':
+            await remotePage.mouse.wheel(action.deltaX || 0, action.deltaY || 0);
+            break;
+          case 'key-down':
+            await remotePage.keyboard.down(action.key);
+            break;
+          case 'key-up':
+            await remotePage.keyboard.up(action.key);
+            break;
+        }
+      } catch {}
+    });
+  });
+}
+
+
 function waitForPort(port, host, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
@@ -1059,6 +1622,21 @@ async function ensureN8nStarted(publicUrlInput = '') {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
 
+  if (url.pathname === '/remote') {
+    sendRemotePage(res);
+    return;
+  }
+
+  if (url.pathname === '/api/remote/open') {
+    await handleRemoteOpen(req, res);
+    return;
+  }
+
+  if (url.pathname === '/api/scrape-bilibili') {
+    await handleScrapeBilibiliRequest(req, res);
+    return;
+  }
+
   if (url.pathname === '/ram') {
     await handleRamRequest(req, res);
     return;
@@ -1103,7 +1681,13 @@ const server = http.createServer(async (req, res) => {
   proxy.web(req, res);
 });
 
+setupRemoteSockets(server);
+
 server.on('upgrade', (req, socket, head) => {
+  if (req.url && req.url.startsWith('/socket.io/')) {
+    return;
+  }
+
   if (!n8nReady) {
     socket.destroy();
     return;
@@ -1119,6 +1703,12 @@ function shutdown(code) {
 
   if (n8nChild && !n8nChild.killed) {
     n8nChild.kill('SIGTERM');
+  }
+
+  if (xvfbChild && !xvfbChild.killed) {
+    try {
+      xvfbChild.kill('SIGTERM');
+    } catch {}
   }
 
   process.exit(code);
