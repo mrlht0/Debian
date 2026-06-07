@@ -27,8 +27,25 @@ ENV N8N_PORT=5678 \
 WORKDIR /app
 USER root
 
-RUN npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg
+RUN apk add --no-cache \
+      xvfb \
+      fluxbox \
+      x11vnc \
+      novnc \
+      websockify \
+      chromium \
+      nss \
+      freetype \
+      harfbuzz \
+      ttf-freefont \
+      font-noto \
+      font-noto-cjk \
+      dbus \
+      udev \
+      bash \
+      curl \
+    && npm init -y >/dev/null 2>&1 \
+    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg playwright-core
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -38,11 +55,19 @@ const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const { execSync, spawn } = require('node:child_process');
+const path = require('node:path');
 const httpProxy = require('http-proxy');
 const { Client: PgClient } = require('pg');
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
 const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
+
+const DISPLAY_NUM = process.env.DISPLAY || ':99';
+const NOVNC_PORT = Number(process.env.NOVNC_INTERNAL_PORT || 6080);
+const VNC_PORT = Number(process.env.VNC_INTERNAL_PORT || 5900);
+const CHROME_BIN = process.env.CHROME_BIN || '/usr/bin/chromium-browser';
+const AI_STUDIO_APP_URL = process.env.AI_STUDIO_APP_URL || 'https://ai.studio/apps/4c2ff89f-3309-4c2c-9613-3058239f23b3';
+const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwright/ai-studio-profile';
 
 const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
 
@@ -55,6 +80,290 @@ const TARGET_DB = process.env.TARGET_DB || 'application-manager';
 
 let mongoose = null;
 let CostHistory = null;
+
+
+// ================= XVFB / noVNC / PLAYWRIGHT HELPERS =================
+const childProcesses = [];
+let desktopStarted = false;
+let aiStudioGuiContext = null;
+let aiStudioGuiPage = null;
+
+function spawnManaged(name, command, args, options = {}) {
+  const child = spawn(command, args, {
+    stdio: options.stdio || ['ignore', 'ignore', 'pipe'],
+    env: options.env || process.env,
+    detached: false,
+  });
+
+  child.on('error', (err) => {
+    console.error(`[${name}] failed to start:`, err.message);
+  });
+
+  if (child.stderr) {
+    child.stderr.on('data', (buf) => {
+      const msg = String(buf).trim();
+      if (msg) console.log(`[${name}] ${msg}`);
+    });
+  }
+
+  child.on('exit', (code, signal) => {
+    console.log(`[${name}] exited code=${code} signal=${signal}`);
+  });
+
+  childProcesses.push(child);
+  return child;
+}
+
+async function ensureDesktopServices() {
+  if (desktopStarted) return;
+
+  fs.mkdirSync('/data/playwright', { recursive: true });
+  fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
+
+  process.env.DISPLAY = DISPLAY_NUM;
+
+  spawnManaged('xvfb', 'Xvfb', [
+    DISPLAY_NUM,
+    '-screen',
+    '0',
+    '1365x900x24',
+    '-ac',
+    '+extension',
+    'RANDR',
+  ]);
+
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  spawnManaged('fluxbox', 'fluxbox', [], {
+    env: { ...process.env, DISPLAY: DISPLAY_NUM },
+  });
+
+  spawnManaged('x11vnc', 'x11vnc', [
+    '-display',
+    DISPLAY_NUM,
+    '-rfbport',
+    String(VNC_PORT),
+    '-forever',
+    '-shared',
+    '-nopw',
+    '-quiet',
+  ]);
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
+  const novncWebCandidates = [
+    '/usr/share/novnc',
+    '/usr/share/noVNC',
+    '/usr/share/webapps/novnc',
+  ];
+  const novncWeb = novncWebCandidates.find((x) => fs.existsSync(x)) || '/usr/share/novnc';
+
+  spawnManaged('novnc', 'websockify', [
+    '--web',
+    novncWeb,
+    String(NOVNC_PORT),
+    `127.0.0.1:${VNC_PORT}`,
+  ]);
+
+  desktopStarted = true;
+  console.log(`[desktop] Xvfb/noVNC ready: DISPLAY=${DISPLAY_NUM}, internal noVNC=${NOVNC_PORT}`);
+}
+
+function getChromiumExecutablePath() {
+  const candidates = [
+    CHROME_BIN,
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/bin/google-chrome',
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+
+  return CHROME_BIN;
+}
+
+async function launchChromium(options = {}) {
+  const { chromium } = require('playwright-core');
+  return chromium.launch({
+    headless: options.headless ?? false,
+    executablePath: getChromiumExecutablePath(),
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--window-size=1365,900',
+    ],
+    env: {
+      ...process.env,
+      DISPLAY: DISPLAY_NUM,
+    },
+  });
+}
+
+async function startAiStudioGui() {
+  await ensureDesktopServices();
+
+  const { chromium } = require('playwright-core');
+
+  if (aiStudioGuiContext) {
+    try {
+      if (aiStudioGuiPage && !aiStudioGuiPage.isClosed()) {
+        await aiStudioGuiPage.goto(AI_STUDIO_APP_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+      }
+    } catch {}
+
+    return {
+      ok: true,
+      reused: true,
+      url: AI_STUDIO_APP_URL,
+      noVncPath: '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify',
+      profileDir: AI_STUDIO_PROFILE_DIR,
+    };
+  }
+
+  aiStudioGuiContext = await chromium.launchPersistentContext(AI_STUDIO_PROFILE_DIR, {
+    headless: false,
+    executablePath: getChromiumExecutablePath(),
+    viewport: { width: 1365, height: 900 },
+    acceptDownloads: true,
+    env: {
+      ...process.env,
+      DISPLAY: DISPLAY_NUM,
+    },
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--window-size=1365,900',
+    ],
+  });
+
+  aiStudioGuiPage = aiStudioGuiContext.pages()[0] || await aiStudioGuiContext.newPage();
+  await aiStudioGuiPage.goto(AI_STUDIO_APP_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+
+  return {
+    ok: true,
+    reused: false,
+    url: AI_STUDIO_APP_URL,
+    noVncPath: '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify',
+    profileDir: AI_STUDIO_PROFILE_DIR,
+  };
+}
+
+function cleanTitle(t) {
+  return String(t || '').replace(/\s+/g, ' ').replace(/[\\/:*?"<>|]/g, '').trim();
+}
+
+function inferEpisode(title) {
+  const s = String(title || '');
+  const m =
+    s.match(/第\s*([0-9一二三四五六七八九十百千万]+)\s*[集话話回]/) ||
+    s.match(/EP\.?\s*(\d+)/i) ||
+    s.match(/E(?:pisode)?\s*(\d+)/i);
+  return m ? String(m[1]) : '';
+}
+
+async function scrapeBilibiliToday(payload = {}) {
+  await ensureDesktopServices();
+
+  const bilibiliUrl = payload.bilibiliUrl || process.env.BILIBILI_URL || 'https://www.bilibili.com/c/douga/?spm_id_from=333.1007.0.0';
+  const maxVideos = Number(payload.maxVideos || process.env.MAX_BILIBILI_VIDEOS || 20);
+  const runDate = payload.runDate || new Date().toISOString().slice(0, 10);
+
+  const browser = await launchChromium({ headless: String(process.env.SCRAPER_HEADLESS || 'false').toLowerCase() === 'true' });
+  const page = await browser.newPage({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36',
+    viewport: { width: 1365, height: 900 },
+  });
+
+  try {
+    await page.goto(bilibiliUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await page.waitForTimeout(6000);
+    try {
+      await page.mouse.wheel(0, 2400);
+      await page.waitForTimeout(2500);
+    } catch {}
+
+    const rows = await page.evaluate(() => {
+      function absUrl(href) {
+        try { return new URL(href, location.origin).href; } catch { return ''; }
+      }
+      function textOf(el) {
+        return (el?.innerText || el?.textContent || el?.getAttribute?.('title') || '').trim();
+      }
+
+      return [...document.querySelectorAll('a[href*="/video/"], a[href*="bilibili.com/video/"]')]
+        .map((a) => {
+          const source_url = absUrl(a.getAttribute('href') || a.href || '');
+          const match = source_url.match(/BV[a-zA-Z0-9]+/);
+          if (!match) return null;
+
+          const card = a.closest('.video-card, .bili-video-card, .feed-card, .card-box, .bili-video-card__wrap, li, div') || a.parentElement;
+          const title = textOf(a) || textOf(card?.querySelector?.('.title')) || textOf(card?.querySelector?.('[title]')) || '';
+          const cardText = textOf(card);
+          const thumbnail = card?.querySelector?.('img')?.src || '';
+
+          return {
+            bvid: match[0],
+            source_url,
+            original_title: title || cardText.split('\n')[0] || '',
+            card_text: cardText,
+            thumbnail_url: thumbnail,
+          };
+        })
+        .filter(Boolean);
+    });
+
+    const seen = new Set();
+    return rows
+      .filter((x) => x.bvid && x.original_title && !seen.has(x.bvid) && seen.add(x.bvid))
+      .slice(0, maxVideos)
+      .map((x) => {
+        const original = cleanTitle(x.original_title);
+        const episode = inferEpisode(original);
+        return {
+          run_date: runDate,
+          unique_key: `${x.bvid}_${episode || 'unknown'}`,
+          bvid: x.bvid,
+          episode,
+          original_title: original,
+          processed_title_vi: `VI - ${original}`,
+          processed_title_en: `EN - ${original}`,
+          processed_title_ja: `JP - ${original}`,
+          source_url: x.source_url,
+          thumbnail_url: x.thumbnail_url,
+          card_text: x.card_text,
+          download_url: '',
+          manual_file_path: '',
+          download_path: '',
+          processed_path: '',
+          preview_url: '',
+          status: 'FOUND_TODAY',
+          platforms: '',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          error: '',
+        };
+      });
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+async function readJsonBody(req) {
+  return await new Promise((resolve) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      try { resolve(body ? JSON.parse(body) : {}); } catch { resolve({}); }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
 
 // ================= STABLE ID =================
 function sanitizeId(value) {
@@ -955,6 +1264,19 @@ const proxy = httpProxy.createProxyServer({
   changeOrigin: false,
 });
 
+const novncProxy = httpProxy.createProxyServer({
+  target: `http://127.0.0.1:${NOVNC_PORT}`,
+  ws: true,
+  xfwd: true,
+  changeOrigin: false,
+});
+
+novncProxy.on('error', (err, req, res) => {
+  if (res && !res.headersSent) {
+    sendText(res, 502, `noVNC proxy error: ${err.message}`);
+  }
+});
+
 proxy.on('error', (err, req, res) => {
   if (res && !res.headersSent) {
     sendText(res, 502, `Proxy error: ${err.message}`);
@@ -1064,6 +1386,53 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/desktop/start') {
+    try {
+      await ensureDesktopServices();
+      sendJson(res, 200, {
+        ok: true,
+        noVncPath: '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify',
+        display: DISPLAY_NUM,
+      });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/aistudio/gui/start') {
+    try {
+      const result = await startAiStudioGui();
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/scrape-bilibili') {
+    try {
+      const payload = req.method === 'POST' ? await readJsonBody(req) : Object.fromEntries(url.searchParams.entries());
+      const rows = await scrapeBilibiliToday(payload);
+      sendJson(res, 200, { ok: true, count: rows.length, rows });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
+  if (url.pathname === '/novnc') {
+    res.writeHead(302, { Location: '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify' });
+    res.end();
+    return;
+  }
+
+  if (url.pathname === '/websockify' || url.pathname.startsWith('/novnc/')) {
+    await ensureDesktopServices();
+    novncProxy.web(req, res);
+    return;
+  }
+
   if (!n8nReady) {
     applySecurityHeaders(res);
 
@@ -1104,6 +1473,15 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on('upgrade', (req, socket, head) => {
+  const reqUrl = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+
+  if (reqUrl.pathname === '/websockify' || reqUrl.pathname.startsWith('/novnc/')) {
+    ensureDesktopServices()
+      .then(() => novncProxy.ws(req, socket, head))
+      .catch(() => socket.destroy());
+    return;
+  }
+
   if (!n8nReady) {
     socket.destroy();
     return;
@@ -1119,6 +1497,12 @@ function shutdown(code) {
 
   if (n8nChild && !n8nChild.killed) {
     n8nChild.kill('SIGTERM');
+  }
+
+  for (const child of childProcesses) {
+    try {
+      if (child && !child.killed) child.kill('SIGTERM');
+    } catch {}
   }
 
   process.exit(code);
