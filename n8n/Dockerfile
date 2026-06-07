@@ -48,6 +48,11 @@ RUN apt-get update \
       udev \
       bash \
       curl \
+      wget \
+      gnupg \
+    && curl -fsSL -o /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/google-chrome.deb \
+    && rm -f /tmp/google-chrome.deb \
     && rm -rf /var/lib/apt/lists/* \
     && if ! id -u node >/dev/null 2>&1; then useradd -m -s /bin/bash node; fi \
     && npm install -g --no-audit --no-fund n8n@2.22.4 \
@@ -77,6 +82,12 @@ const CHROME_BIN = process.env.CHROME_BIN || '';
 
 const AI_STUDIO_APP_URL = process.env.AI_STUDIO_APP_URL || 'https://ai.studio/apps/4c2ff89f-3309-4c2c-9613-3058239f23b3';
 const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwright/ai-studio-profile';
+const AI_STUDIO_PROFILE_PARENT = path.dirname(AI_STUDIO_PROFILE_DIR);
+const AI_STUDIO_PROFILE_NAME = path.basename(AI_STUDIO_PROFILE_DIR);
+const AI_STUDIO_PROFILE_ARCHIVE = '/tmp/aistudio-profile-cache.tgz';
+const AI_STUDIO_PROFILE_BACKUP_ENABLED = String(process.env.AI_STUDIO_PROFILE_BACKUP_ENABLED || 'true').toLowerCase() !== 'false';
+const AI_STUDIO_PROFILE_SYNC_INTERVAL_MS = Number(process.env.AI_STUDIO_PROFILE_SYNC_INTERVAL_MS || 120000);
+const AI_STUDIO_PROFILE_BACKUP_KEY = process.env.AI_STUDIO_PROFILE_BACKUP_KEY || '';
 
 const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
 const NOVNC_READY_PATH = '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify';
@@ -97,6 +108,9 @@ const childProcesses = [];
 let desktopStarted = false;
 let aiStudioGuiContext = null;
 let aiStudioGuiPage = null;
+let aiStudioChromeProcess = null;
+let profileSyncTimer = null;
+let profileBackupInProgress = false;
 
 function spawnManaged(name, command, args, options = {}) {
   const child = spawn(command, args, {
@@ -269,17 +283,211 @@ async function launchChromium(options = {}) {
   return chromium.launch(launchOptions);
 }
 
+
+function getAiStudioProfileBackupKey() {
+  return AI_STUDIO_PROFILE_BACKUP_KEY || `${getProjectName()}_aistudio_profile`;
+}
+
+function getPgConfig() {
+  return {
+    host: process.env.DB_POSTGRESDB_HOST,
+    port: Number(process.env.DB_POSTGRESDB_PORT || 5432),
+    database: process.env.DB_POSTGRESDB_DATABASE || 'postgres',
+    user: process.env.DB_POSTGRESDB_USER,
+    password: process.env.DB_POSTGRESDB_PASSWORD,
+    ssl: String(process.env.DB_POSTGRESDB_SSL_ENABLED || 'true').toLowerCase() === 'true'
+      ? { rejectUnauthorized: String(process.env.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED || 'false').toLowerCase() === 'true' }
+      : false,
+  };
+}
+
+async function withPgClient(fn) {
+  const { Client } = require('pg');
+  const client = new Client(getPgConfig());
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+function hasProfileFiles() {
+  try {
+    return fs.existsSync(path.join(AI_STUDIO_PROFILE_DIR, 'Default')) ||
+      fs.existsSync(path.join(AI_STUDIO_PROFILE_DIR, 'Local State')) ||
+      fs.readdirSync(AI_STUDIO_PROFILE_DIR).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureProfileCacheTable(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS browser_profile_cache (
+      profile_key TEXT PRIMARY KEY,
+      profile_name TEXT NOT NULL,
+      archive BYTEA NOT NULL,
+      size_bytes BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+async function restoreAiStudioProfileFromDb() {
+  if (!AI_STUDIO_PROFILE_BACKUP_ENABLED) return { ok: false, skipped: 'disabled' };
+
+  fs.mkdirSync(AI_STUDIO_PROFILE_PARENT, { recursive: true });
+  fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
+
+  // Nếu profile hiện tại đã có dữ liệu thì ưu tiên dùng nó, tránh ghi đè session mới.
+  if (hasProfileFiles() && String(process.env.AI_STUDIO_PROFILE_FORCE_RESTORE || 'false').toLowerCase() !== 'true') {
+    return { ok: false, skipped: 'local_profile_exists' };
+  }
+
+  const profileKey = getAiStudioProfileBackupKey();
+
+  return await withPgClient(async (client) => {
+    await ensureProfileCacheTable(client);
+    const result = await client.query(
+      'SELECT archive, size_bytes, updated_at FROM browser_profile_cache WHERE profile_key = $1',
+      [profileKey]
+    );
+
+    if (!result.rows.length) return { ok: false, skipped: 'no_backup_in_db', profileKey };
+
+    const archive = result.rows[0].archive;
+    fs.writeFileSync(AI_STUDIO_PROFILE_ARCHIVE, archive);
+
+    // Xóa thư mục profile cũ rồi giải nén bản mới nhất từ Supabase/Postgres.
+    fs.rmSync(AI_STUDIO_PROFILE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(AI_STUDIO_PROFILE_PARENT, { recursive: true });
+
+    execSync(`tar -xzf ${AI_STUDIO_PROFILE_ARCHIVE} -C ${AI_STUDIO_PROFILE_PARENT}`, {
+      stdio: 'ignore',
+    });
+
+    fs.rmSync(AI_STUDIO_PROFILE_ARCHIVE, { force: true });
+
+    return {
+      ok: true,
+      restored: true,
+      profileKey,
+      sizeBytes: Number(result.rows[0].size_bytes || 0),
+      updatedAt: result.rows[0].updated_at,
+    };
+  });
+}
+
+async function backupAiStudioProfileToDb(reason = 'manual') {
+  if (!AI_STUDIO_PROFILE_BACKUP_ENABLED) return { ok: false, skipped: 'disabled' };
+  if (profileBackupInProgress) return { ok: false, skipped: 'backup_in_progress' };
+  if (!hasProfileFiles()) return { ok: false, skipped: 'profile_empty' };
+
+  profileBackupInProgress = true;
+  const profileKey = getAiStudioProfileBackupKey();
+
+  try {
+    fs.rmSync(AI_STUDIO_PROFILE_ARCHIVE, { force: true });
+
+    // Không backup cache nặng; vẫn giữ cookies, Local State, IndexedDB, Extension State.
+    execSync([
+      'tar',
+      '-czf',
+      AI_STUDIO_PROFILE_ARCHIVE,
+      '-C',
+      AI_STUDIO_PROFILE_PARENT,
+      '--exclude=*/Cache/*',
+      '--exclude=*/Code Cache/*',
+      '--exclude=*/GPUCache/*',
+      '--exclude=*/ShaderCache/*',
+      '--exclude=*/Service Worker/CacheStorage/*',
+      '--exclude=*/Crashpad/*',
+      AI_STUDIO_PROFILE_NAME,
+    ].map((x) => `'${String(x).replace(/'/g, "'\\''")}'`).join(' '), {
+      stdio: 'ignore',
+      shell: '/bin/bash',
+    });
+
+    const archive = fs.readFileSync(AI_STUDIO_PROFILE_ARCHIVE);
+    const sizeBytes = archive.length;
+
+    await withPgClient(async (client) => {
+      await ensureProfileCacheTable(client);
+      await client.query(
+        `INSERT INTO browser_profile_cache(profile_key, profile_name, archive, size_bytes, updated_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (profile_key)
+         DO UPDATE SET
+           profile_name = EXCLUDED.profile_name,
+           archive = EXCLUDED.archive,
+           size_bytes = EXCLUDED.size_bytes,
+           updated_at = NOW()`,
+        [profileKey, AI_STUDIO_PROFILE_NAME, archive, sizeBytes]
+      );
+    });
+
+    fs.rmSync(AI_STUDIO_PROFILE_ARCHIVE, { force: true });
+
+    console.log(`[aistudio-profile] backup saved reason=${reason} key=${profileKey} size=${sizeBytes}`);
+    return { ok: true, saved: true, reason, profileKey, sizeBytes };
+  } catch (err) {
+    console.error('[aistudio-profile] backup failed:', err.message);
+    return { ok: false, error: err.message, profileKey };
+  } finally {
+    profileBackupInProgress = false;
+  }
+}
+
+function startAiStudioProfileAutoSync() {
+  if (!AI_STUDIO_PROFILE_BACKUP_ENABLED || profileSyncTimer) return;
+
+  profileSyncTimer = setInterval(() => {
+    backupAiStudioProfileToDb('interval').catch((err) => {
+      console.error('[aistudio-profile] interval backup error:', err.message);
+    });
+  }, Math.max(30000, AI_STUDIO_PROFILE_SYNC_INTERVAL_MS));
+
+  profileSyncTimer.unref?.();
+}
+
+function getChromeExecutablePath() {
+  const candidates = [
+    process.env.GOOGLE_CHROME_BIN,
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/opt/google/chrome/chrome',
+    getChromiumExecutablePath(),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+
+  return '';
+}
+
+async function waitForProfileSettled(ms = 2500) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function startAiStudioGui() {
   await ensureDesktopServices();
 
-  const { chromium } = require('playwright-core');
+  const restoreResult = await restoreAiStudioProfileFromDb().catch((err) => ({
+    ok: false,
+    error: err.message,
+  }));
 
-  if (aiStudioGuiContext) {
-    try {
-      if (aiStudioGuiPage && !aiStudioGuiPage.isClosed()) {
-        await aiStudioGuiPage.goto(AI_STUDIO_APP_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
-      }
-    } catch {}
+  const chromePath = getChromeExecutablePath();
+  if (!chromePath) {
+    throw new Error('Không tìm thấy Google Chrome/Chromium executable trong container.');
+  }
+
+  fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
+
+  if (aiStudioChromeProcess && !aiStudioChromeProcess.killed) {
+    startAiStudioProfileAutoSync();
 
     return {
       ok: true,
@@ -287,31 +495,47 @@ async function startAiStudioGui() {
       url: AI_STUDIO_APP_URL,
       noVncPath: NOVNC_READY_PATH,
       profileDir: AI_STUDIO_PROFILE_DIR,
+      browser: chromePath,
+      restore: restoreResult,
+      profileBackupKey: getAiStudioProfileBackupKey(),
     };
   }
 
-  const executablePath = getChromiumExecutablePath();
+  const chromeArgs = [
+    `--user-data-dir=${AI_STUDIO_PROFILE_DIR}`,
+    '--profile-directory=Default',
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--window-size=1365,900',
+    '--start-maximized',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--password-store=basic',
+    '--use-mock-keychain',
+    '--lang=en-US',
+    AI_STUDIO_APP_URL,
+  ];
 
-  aiStudioGuiContext = await chromium.launchPersistentContext(AI_STUDIO_PROFILE_DIR, {
-    headless: false,
-    ...(executablePath ? { executablePath } : {}),
-    viewport: { width: 1365, height: 900 },
-    acceptDownloads: true,
+  // Không dùng playwright.launchPersistentContext cho login Google,
+  // vì Google thường chặn browser automation với "This browser or app may not be secure".
+  aiStudioChromeProcess = spawnManaged('aistudio-chrome', chromePath, chromeArgs, {
+    stdio: ['ignore', 'ignore', 'pipe'],
     env: {
       ...process.env,
       DISPLAY: DISPLAY_NUM,
+      HOME: '/home/node',
     },
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--window-size=1365,900',
-    ],
   });
 
-  aiStudioGuiPage = aiStudioGuiContext.pages()[0] || await aiStudioGuiContext.newPage();
-  await aiStudioGuiPage.goto(AI_STUDIO_APP_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  aiStudioChromeProcess.on('exit', () => {
+    backupAiStudioProfileToDb('chrome_exit').catch(() => {});
+    aiStudioChromeProcess = null;
+  });
+
+  await waitForProfileSettled(2500);
+  startAiStudioProfileAutoSync();
 
   return {
     ok: true,
@@ -319,6 +543,9 @@ async function startAiStudioGui() {
     url: AI_STUDIO_APP_URL,
     noVncPath: NOVNC_READY_PATH,
     profileDir: AI_STUDIO_PROFILE_DIR,
+    browser: chromePath,
+    restore: restoreResult,
+    profileBackupKey: getAiStudioProfileBackupKey(),
   };
 }
 
@@ -1544,6 +1771,42 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         noVncPath: NOVNC_READY_PATH,
         display: DISPLAY_NUM,
+      });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/aistudio/profile/backup') {
+    try {
+      const result = await backupAiStudioProfileToDb('api');
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/aistudio/profile/restore') {
+    try {
+      const result = await restoreAiStudioProfileFromDb();
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/aistudio/profile/status') {
+    try {
+      sendJson(res, 200, {
+        ok: true,
+        profileDir: AI_STUDIO_PROFILE_DIR,
+        profileExists: hasProfileFiles(),
+        backupEnabled: AI_STUDIO_PROFILE_BACKUP_ENABLED,
+        profileBackupKey: getAiStudioProfileBackupKey(),
+        chromeRunning: Boolean(aiStudioChromeProcess && !aiStudioChromeProcess.killed),
       });
     } catch (err) {
       sendJson(res, 500, { ok: false, error: err.message });
