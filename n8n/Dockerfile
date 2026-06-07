@@ -362,7 +362,6 @@ async function launchChromium(options = {}) {
 
   const args = [
     '--no-sandbox',
-    '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
     '--disable-gpu',
     '--disable-software-rasterizer',
@@ -629,12 +628,12 @@ async function startAiStudioGui() {
     `--user-data-dir=${AI_STUDIO_PROFILE_DIR}`,
     '--profile-directory=Default',
     '--no-sandbox',
-    '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
     '--window-size=1365,900',
     '--start-maximized',
     '--no-first-run',
     '--no-default-browser-check',
+    '--disable-features=OptimizationHints,MediaRouter,Translate,PushMessaging',
     '--disable-extensions',
     '--disable-crash-reporter',
     '--disable-breakpad',
