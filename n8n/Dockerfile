@@ -109,6 +109,10 @@ let desktopStarted = false;
 let aiStudioGuiContext = null;
 let aiStudioGuiPage = null;
 let aiStudioChromeProcess = null;
+let xvfbProcess = null;
+let fluxboxProcess = null;
+let x11vncProcess = null;
+let websockifyProcess = null;
 let profileSyncTimer = null;
 let profileBackupInProgress = false;
 
@@ -138,42 +142,64 @@ function spawnManaged(name, command, args, options = {}) {
   return child;
 }
 
-async function ensureDesktopServices() {
-  if (desktopStarted) return;
+function isChildAlive(child) {
+  return Boolean(child && !child.killed && child.exitCode === null && child.signalCode === null);
+}
 
+async function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureDesktopServices() {
   fs.mkdirSync('/data/playwright', { recursive: true });
   fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
 
   process.env.DISPLAY = DISPLAY_NUM;
 
-  spawnManaged('xvfb', 'Xvfb', [
-    DISPLAY_NUM,
-    '-screen',
-    '0',
-    '1365x900x24',
-    '-ac',
-    '+extension',
-    'RANDR',
-  ]);
+  if (!isChildAlive(xvfbProcess)) {
+    xvfbProcess = spawnManaged('xvfb', 'Xvfb', [
+      DISPLAY_NUM,
+      '-screen',
+      '0',
+      '1365x900x24',
+      '-ac',
+      '+extension',
+      'RANDR',
+      '-nolisten',
+      'tcp',
+    ]);
+    await waitMs(1200);
+  }
 
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+  if (!isChildAlive(fluxboxProcess)) {
+    fluxboxProcess = spawnManaged('fluxbox', 'fluxbox', [], {
+      env: { ...process.env, DISPLAY: DISPLAY_NUM },
+    });
+    await waitMs(500);
+  }
 
-  spawnManaged('fluxbox', 'fluxbox', [], {
-    env: { ...process.env, DISPLAY: DISPLAY_NUM },
-  });
-
-  spawnManaged('x11vnc', 'x11vnc', [
-    '-display',
-    DISPLAY_NUM,
-    '-rfbport',
-    String(VNC_PORT),
-    '-forever',
-    '-shared',
-    '-nopw',
-    '-quiet',
-  ]);
-
-  await new Promise((resolve) => setTimeout(resolve, 800));
+  if (!isChildAlive(x11vncProcess)) {
+    x11vncProcess = spawnManaged('x11vnc', 'x11vnc', [
+      '-display',
+      DISPLAY_NUM,
+      '-rfbport',
+      String(VNC_PORT),
+      '-forever',
+      '-shared',
+      '-nopw',
+      '-noxdamage',
+      '-repeat',
+      '-rfbwait',
+      '120000',
+      '-defer',
+      '10',
+      '-wait',
+      '10',
+      '-o',
+      '/tmp/x11vnc.log',
+    ]);
+    await waitMs(1000);
+  }
 
   const novncWebCandidates = [
     '/usr/share/novnc',
@@ -182,15 +208,20 @@ async function ensureDesktopServices() {
   ];
   const novncWeb = novncWebCandidates.find((x) => fs.existsSync(x)) || '/usr/share/novnc';
 
-  spawnManaged('novnc', 'websockify', [
-    '--web',
-    novncWeb,
-    String(NOVNC_PORT),
-    `127.0.0.1:${VNC_PORT}`,
-  ]);
+  if (!isChildAlive(websockifyProcess)) {
+    websockifyProcess = spawnManaged('websockify', 'websockify', [
+      '--web',
+      novncWeb,
+      '--heartbeat',
+      '30',
+      String(NOVNC_PORT),
+      `127.0.0.1:${VNC_PORT}`,
+    ]);
+    await waitMs(1000);
+  }
 
   desktopStarted = true;
-  console.log(`[desktop] Xvfb/noVNC ready: DISPLAY=${DISPLAY_NUM}, internal noVNC=${NOVNC_PORT}`);
+  console.log(`[desktop] services ready: DISPLAY=${DISPLAY_NUM}, VNC=${VNC_PORT}, noVNC=${NOVNC_PORT}`);
 }
 
 function findPlaywrightBundledChromium() {
@@ -474,11 +505,6 @@ async function waitForProfileSettled(ms = 2500) {
 async function startAiStudioGui() {
   await ensureDesktopServices();
 
-  const restoreResult = await restoreAiStudioProfileFromDb().catch((err) => ({
-    ok: false,
-    error: err.message,
-  }));
-
   const chromePath = getChromeExecutablePath();
   if (!chromePath) {
     throw new Error('Không tìm thấy Google Chrome/Chromium executable trong container.');
@@ -486,7 +512,10 @@ async function startAiStudioGui() {
 
   fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
 
-  if (aiStudioChromeProcess && !aiStudioChromeProcess.killed) {
+  // Quan trọng: nếu Chrome đang chạy thì KHÔNG restore profile nữa.
+  // Restore đè lên profile đang đăng nhập có thể làm AI Studio/Google session lỗi trang
+  // và làm noVNC/websockify bị disconnect do Chrome crash.
+  if (isChildAlive(aiStudioChromeProcess)) {
     startAiStudioProfileAutoSync();
 
     return {
@@ -496,9 +525,17 @@ async function startAiStudioGui() {
       noVncPath: NOVNC_READY_PATH,
       profileDir: AI_STUDIO_PROFILE_DIR,
       browser: chromePath,
-      restore: restoreResult,
+      restore: { ok: true, skipped: 'chrome_already_running' },
       profileBackupKey: getAiStudioProfileBackupKey(),
     };
+  }
+
+  let restoreResult = { ok: false, skipped: 'local_profile_exists' };
+  if (!hasProfileFiles()) {
+    restoreResult = await restoreAiStudioProfileFromDb().catch((err) => ({
+      ok: false,
+      error: err.message,
+    }));
   }
 
   const chromeArgs = [
@@ -512,14 +549,19 @@ async function startAiStudioGui() {
     '--start-maximized',
     '--no-first-run',
     '--no-default-browser-check',
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-features=Translate,AutomationControlled',
     '--password-store=basic',
     '--use-mock-keychain',
     '--lang=en-US',
     AI_STUDIO_APP_URL,
   ];
 
-  // Không dùng playwright.launchPersistentContext cho login Google,
-  // vì Google thường chặn browser automation với "This browser or app may not be secure".
+  // Không dùng playwright.launchPersistentContext cho login Google.
+  // Mở Chrome Stable thật qua Xvfb/noVNC để giảm lỗi "browser or app may not be secure".
   aiStudioChromeProcess = spawnManaged('aistudio-chrome', chromePath, chromeArgs, {
     stdio: ['ignore', 'ignore', 'pipe'],
     env: {
@@ -1650,9 +1692,14 @@ const novncProxy = httpProxy.createProxyServer({
 });
 
 novncProxy.on('error', (err, req, res) => {
+  console.error('[novnc-proxy] error:', err.message);
   if (res && !res.headersSent) {
     sendText(res, 502, `noVNC proxy error: ${err.message}`);
   }
+});
+
+novncProxy.on('close', () => {
+  console.log('[novnc-proxy] websocket closed');
 });
 
 proxy.on('error', (err, req, res) => {
