@@ -32,6 +32,8 @@ RUN apt-get update \
       xvfb \
       fluxbox \
       x11vnc \
+      x11-xserver-utils \
+      procps \
       novnc \
       websockify \
       ca-certificates \
@@ -150,35 +152,106 @@ async function waitMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function shellOk(command) {
+  try {
+    execSync(command, { stdio: 'ignore', shell: '/bin/bash' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function displayId() {
+  return String(DISPLAY_NUM).replace(/^:/, '').split('.')[0] || '99';
+}
+
+function isDisplayResponsive() {
+  return shellOk(`DISPLAY=${DISPLAY_NUM} timeout 2 xset q`);
+}
+
+function cleanupStaleDisplay() {
+  if (isDisplayResponsive()) return false;
+
+  const id = displayId();
+  console.log(`[desktop] DISPLAY ${DISPLAY_NUM} is not responsive. Cleaning stale locks/processes...`);
+
+  try {
+    execSync(`pkill -f "Xvfb ${DISPLAY_NUM}" || true`, { stdio: 'ignore', shell: '/bin/bash' });
+  } catch {}
+
+  try {
+    fs.rmSync(`/tmp/.X${id}-lock`, { force: true });
+    fs.rmSync(`/tmp/.X11-unix/X${id}`, { force: true });
+  } catch {}
+
+  xvfbProcess = null;
+  fluxboxProcess = null;
+  x11vncProcess = null;
+
+  return true;
+}
+
+function isPortOpen(port) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port, timeout: 800 }, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('error', () => resolve(false));
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
 async function ensureDesktopServices() {
   fs.mkdirSync('/data/playwright', { recursive: true });
+  fs.mkdirSync('/home/node', { recursive: true });
   fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
+  fs.mkdirSync('/tmp/.X11-unix', { recursive: true });
 
   process.env.DISPLAY = DISPLAY_NUM;
 
-  if (!isChildAlive(xvfbProcess)) {
-    xvfbProcess = spawnManaged('xvfb', 'Xvfb', [
-      DISPLAY_NUM,
-      '-screen',
-      '0',
-      '1365x900x24',
-      '-ac',
-      '+extension',
-      'RANDR',
-      '-nolisten',
-      'tcp',
-    ]);
-    await waitMs(1200);
+  // Nếu có lock nhưng X server không sống thì dọn sạch. Nếu X server sống thì tuyệt đối không start Xvfb lần 2.
+  cleanupStaleDisplay();
+
+  if (!isDisplayResponsive()) {
+    if (!isChildAlive(xvfbProcess)) {
+      xvfbProcess = spawnManaged('xvfb', 'Xvfb', [
+        DISPLAY_NUM,
+        '-screen',
+        '0',
+        '1365x900x24',
+        '-ac',
+        '+extension',
+        'RANDR',
+        '-nolisten',
+        'tcp',
+      ]);
+    }
+
+    // Đợi Xvfb thật sự nhận kết nối, không chỉ đợi timeout cố định.
+    for (let i = 0; i < 20; i++) {
+      if (isDisplayResponsive()) break;
+      await waitMs(300);
+    }
+  } else {
+    console.log(`[desktop] reusing active DISPLAY ${DISPLAY_NUM}`);
+  }
+
+  if (!isDisplayResponsive()) {
+    throw new Error(`X server ${DISPLAY_NUM} is not ready. Check /tmp/.X${displayId()}-lock and Xvfb logs.`);
   }
 
   if (!isChildAlive(fluxboxProcess)) {
     fluxboxProcess = spawnManaged('fluxbox', 'fluxbox', [], {
-      env: { ...process.env, DISPLAY: DISPLAY_NUM },
+      env: { ...process.env, DISPLAY: DISPLAY_NUM, HOME: '/home/node' },
     });
-    await waitMs(500);
+    await waitMs(700);
   }
 
-  if (!isChildAlive(x11vncProcess)) {
+  if (!isChildAlive(x11vncProcess) || !(await isPortOpen(VNC_PORT))) {
     x11vncProcess = spawnManaged('x11vnc', 'x11vnc', [
       '-display',
       DISPLAY_NUM,
@@ -198,7 +271,14 @@ async function ensureDesktopServices() {
       '-o',
       '/tmp/x11vnc.log',
     ]);
-    await waitMs(1000);
+    for (let i = 0; i < 20; i++) {
+      if (await isPortOpen(VNC_PORT)) break;
+      await waitMs(300);
+    }
+  }
+
+  if (!(await isPortOpen(VNC_PORT))) {
+    throw new Error(`x11vnc is not listening on 127.0.0.1:${VNC_PORT}. Check /tmp/x11vnc.log.`);
   }
 
   const novncWebCandidates = [
@@ -208,7 +288,7 @@ async function ensureDesktopServices() {
   ];
   const novncWeb = novncWebCandidates.find((x) => fs.existsSync(x)) || '/usr/share/novnc';
 
-  if (!isChildAlive(websockifyProcess)) {
+  if (!isChildAlive(websockifyProcess) || !(await isPortOpen(NOVNC_PORT))) {
     websockifyProcess = spawnManaged('websockify', 'websockify', [
       '--web',
       novncWeb,
@@ -217,7 +297,14 @@ async function ensureDesktopServices() {
       String(NOVNC_PORT),
       `127.0.0.1:${VNC_PORT}`,
     ]);
-    await waitMs(1000);
+    for (let i = 0; i < 20; i++) {
+      if (await isPortOpen(NOVNC_PORT)) break;
+      await waitMs(300);
+    }
+  }
+
+  if (!(await isPortOpen(NOVNC_PORT))) {
+    throw new Error(`websockify is not listening on 127.0.0.1:${NOVNC_PORT}.`);
   }
 
   desktopStarted = true;
@@ -544,16 +631,13 @@ async function startAiStudioGui() {
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
-    '--disable-gpu',
     '--window-size=1365,900',
     '--start-maximized',
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-background-networking',
-    '--disable-background-timer-throttling',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    '--disable-features=Translate,AutomationControlled',
+    '--disable-extensions',
+    '--disable-crash-reporter',
+    '--disable-breakpad',
     '--password-store=basic',
     '--use-mock-keychain',
     '--lang=en-US',
