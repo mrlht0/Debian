@@ -79,6 +79,7 @@ const AI_STUDIO_APP_URL = process.env.AI_STUDIO_APP_URL || 'https://ai.studio/ap
 const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwright/ai-studio-profile';
 
 const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
+const NOVNC_READY_PATH = '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify';
 
 // MongoDB này chỉ dùng cho RAM/cost/network, không dùng cho n8n login/workflow.
 const MONGODB_URI =
@@ -284,7 +285,7 @@ async function startAiStudioGui() {
       ok: true,
       reused: true,
       url: AI_STUDIO_APP_URL,
-      noVncPath: '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify',
+      noVncPath: NOVNC_READY_PATH,
       profileDir: AI_STUDIO_PROFILE_DIR,
     };
   }
@@ -316,7 +317,7 @@ async function startAiStudioGui() {
     ok: true,
     reused: false,
     url: AI_STUDIO_APP_URL,
-    noVncPath: '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify',
+    noVncPath: NOVNC_READY_PATH,
     profileDir: AI_STUDIO_PROFILE_DIR,
   };
 }
@@ -477,13 +478,13 @@ async function scrapeBilibiliToday(payload = {}) {
         const episode = inferEpisode(original);
         return {
           run_date: runDate,
-          unique_key: `${x.bvid}_${episode || 'unknown'}`,
+          unique_key: x.bvid,
           bvid: x.bvid,
           episode,
           original_title: original,
-          processed_title_vi: `VI - ${original}`,
-          processed_title_en: `EN - ${original}`,
-          processed_title_ja: `JP - ${original}`,
+          processed_title_vi: '',
+          processed_title_en: '',
+          processed_title_ja: '',
           source_url: x.source_url,
           thumbnail_url: x.thumbnail_url,
           card_text: x.card_text,
@@ -1541,7 +1542,7 @@ const server = http.createServer(async (req, res) => {
       await ensureDesktopServices();
       sendJson(res, 200, {
         ok: true,
-        noVncPath: '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify',
+        noVncPath: NOVNC_READY_PATH,
         display: DISPLAY_NUM,
       });
     } catch (err) {
@@ -1571,14 +1572,37 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname === '/novnc') {
-    res.writeHead(302, { Location: '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify' });
+  // noVNC entrypoint: start desktop + open AI Studio automatically, then redirect to noVNC UI.
+  if (url.pathname === '/novnc' || url.pathname === '/novnc/') {
+    try {
+      await startAiStudioGui();
+    } catch (err) {
+      console.error('[novnc] failed to auto-open AI Studio:', err.message);
+    }
+
+    res.writeHead(302, { Location: NOVNC_READY_PATH });
     res.end();
     return;
   }
 
+  // Silence harmless noVNC version lookup 404.
+  if (url.pathname === '/novnc/package.json') {
+    sendJson(res, 200, { name: 'novnc', version: 'container' });
+    return;
+  }
+
   if (url.pathname === '/websockify' || url.pathname.startsWith('/novnc/')) {
-    await ensureDesktopServices();
+    // If the user opens /novnc/vnc.html directly, also open AI Studio automatically.
+    if (url.pathname === '/novnc/vnc.html' || url.pathname.endsWith('/vnc.html')) {
+      try {
+        await startAiStudioGui();
+      } catch (err) {
+        console.error('[novnc] failed to auto-open AI Studio:', err.message);
+        await ensureDesktopServices();
+      }
+    } else {
+      await ensureDesktopServices();
+    }
 
     if (url.pathname.startsWith('/novnc/')) {
       req.url = req.url.replace(/^\/novnc/, '') || '/';
@@ -1632,7 +1656,12 @@ server.on('upgrade', (req, socket, head) => {
 
   if (reqUrl.pathname === '/websockify' || reqUrl.pathname.startsWith('/novnc/')) {
     ensureDesktopServices()
-      .then(() => novncProxy.ws(req, socket, head))
+      .then(() => {
+        if (reqUrl.pathname.startsWith('/novnc/')) {
+          req.url = req.url.replace(/^\/novnc/, '') || '/';
+        }
+        novncProxy.ws(req, socket, head);
+      })
       .catch(() => socket.destroy());
     return;
   }
