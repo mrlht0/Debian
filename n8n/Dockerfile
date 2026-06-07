@@ -34,7 +34,6 @@ RUN apt-get update \
       x11vnc \
       novnc \
       websockify \
-      chromium \
       ca-certificates \
       fonts-liberation \
       fonts-noto \
@@ -73,7 +72,8 @@ const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
 const DISPLAY_NUM = process.env.DISPLAY || ':99';
 const NOVNC_PORT = Number(process.env.NOVNC_INTERNAL_PORT || 6080);
 const VNC_PORT = Number(process.env.VNC_INTERNAL_PORT || 5900);
-const CHROME_BIN = process.env.CHROME_BIN || '/usr/bin/chromium';
+const CHROME_BIN = process.env.CHROME_BIN || '';
+
 const AI_STUDIO_APP_URL = process.env.AI_STUDIO_APP_URL || 'https://ai.studio/apps/4c2ff89f-3309-4c2c-9613-3058239f23b3';
 const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwright/ai-studio-profile';
 
@@ -177,26 +177,56 @@ async function ensureDesktopServices() {
   console.log(`[desktop] Xvfb/noVNC ready: DISPLAY=${DISPLAY_NUM}, internal noVNC=${NOVNC_PORT}`);
 }
 
+function findPlaywrightBundledChromium() {
+  const roots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    '/ms-playwright',
+  ].filter(Boolean);
+
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+
+      const dirs = fs.readdirSync(root).filter((name) => name.startsWith('chromium'));
+      for (const dir of dirs) {
+        const candidates = [
+          path.join(root, dir, 'chrome-linux', 'chrome'),
+          path.join(root, dir, 'chrome-linux-headless-shell', 'headless_shell'),
+        ];
+
+        for (const candidate of candidates) {
+          if (fs.existsSync(candidate)) return candidate;
+        }
+      }
+    } catch {}
+  }
+
+  return '';
+}
+
 function getChromiumExecutablePath() {
   const candidates = [
     CHROME_BIN,
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
     '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    findPlaywrightBundledChromium(),
   ];
 
   for (const candidate of candidates) {
     if (candidate && fs.existsSync(candidate)) return candidate;
   }
 
-  return CHROME_BIN;
+  return '';
 }
 
 async function launchChromium(options = {}) {
   const { chromium } = require('playwright-core');
+  const executablePath = getChromiumExecutablePath();
+
   return chromium.launch({
     headless: options.headless ?? false,
-    executablePath: getChromiumExecutablePath(),
+    ...(executablePath ? { executablePath } : {}),
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -232,9 +262,11 @@ async function startAiStudioGui() {
     };
   }
 
+  const executablePath = getChromiumExecutablePath();
+
   aiStudioGuiContext = await chromium.launchPersistentContext(AI_STUDIO_PROFILE_DIR, {
     headless: false,
-    executablePath: getChromiumExecutablePath(),
+    ...(executablePath ? { executablePath } : {}),
     viewport: { width: 1365, height: 900 },
     acceptDownloads: true,
     env: {
