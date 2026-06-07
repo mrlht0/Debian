@@ -49,11 +49,12 @@ RUN apt-get update \
       bash \
       curl \
     && rm -rf /var/lib/apt/lists/* \
-    && if ! id -u node >/dev/null 2>&1; then useradd -m -u 1000 -s /bin/bash node; fi \
+    && if ! id -u node >/dev/null 2>&1; then useradd -m -s /bin/bash node; fi \
     && npm install -g --no-audit --no-fund n8n@2.22.4 \
     && npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund http-proxy mongoose mongodb pg playwright-core
-
+    && npm install --no-package-lock --no-save --no-audit --no-fund \
+       http-proxy mongoose mongodb pg playwright-core
+  
 RUN cat <<'EOF' > /app/server.js
 'use strict';
 
@@ -224,25 +225,47 @@ async function launchChromium(options = {}) {
   const { chromium } = require('playwright-core');
   const executablePath = getChromiumExecutablePath();
 
-  return chromium.launch({
-    headless: options.headless ?? false,
+  const isHeadless = options.headless ?? false;
+
+  const args = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-software-rasterizer',
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-breakpad',
+    '--disable-component-extensions-with-background-pages',
+    '--disable-extensions',
+    '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints',
+    '--disable-ipc-flooding-protection',
+    '--disable-renderer-backgrounding',
+    '--disable-sync',
+    '--metrics-recording-only',
+    '--mute-audio',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--password-store=basic',
+    '--use-mock-keychain',
+    '--window-size=1365,900',
+  ];
+
+  const launchOptions = {
+    headless: isHeadless,
     ...(executablePath ? { executablePath } : {}),
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-software-rasterizer',
-      '--no-zygote',
-      '--disable-extensions',
-      '--disable-background-networking',
-      '--window-size=1365,900',
-    ],
-    env: {
+    args,
+  };
+
+  if (!isHeadless) {
+    launchOptions.env = {
       ...process.env,
       DISPLAY: DISPLAY_NUM,
-    },
-  });
+    };
+  }
+
+  return chromium.launch(launchOptions);
 }
 
 async function startAiStudioGui() {
@@ -282,10 +305,6 @@ async function startAiStudioGui() {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--disable-software-rasterizer',
-      '--no-zygote',
-      '--disable-extensions',
-      '--disable-background-networking',
       '--window-size=1365,900',
     ],
   });
@@ -316,11 +335,32 @@ function inferEpisode(title) {
 }
 
 async function scrapeBilibiliToday(payload = {}) {
-  const bilibiliUrl = payload.bilibiliUrl || process.env.BILIBILI_URL || 'https://www.bilibili.com/c/douga/?spm_id_from=333.1007.0.0';
-  const maxVideos = Number(payload.maxVideos || process.env.MAX_BILIBILI_VIDEOS || 20);
-  const runDate = payload.runDate || new Date().toISOString().slice(0, 10);
+  const bilibiliUrl =
+    payload.bilibiliUrl ||
+    process.env.BILIBILI_URL ||
+    'https://www.bilibili.com/c/douga/?spm_id_from=333.1007.0.0';
 
-  const browser = await launchChromium({ headless: String(process.env.SCRAPER_HEADLESS || 'true').toLowerCase() !== 'false' });
+  const maxVideos = Number(
+    payload.maxVideos ||
+    process.env.MAX_BILIBILI_VIDEOS ||
+    20
+  );
+
+  const runDate =
+    payload.runDate ||
+    new Date().toISOString().slice(0, 10);
+
+  const scraperHeadless =
+    String(
+      payload.headless ??
+      process.env.SCRAPER_HEADLESS ??
+      'true'
+    ).toLowerCase() !== 'false';
+
+  const browser = await launchChromium({
+    headless: scraperHeadless,
+    scraper: true,
+  });
   const page = await browser.newPage({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36',
     viewport: { width: 1365, height: 900 },
