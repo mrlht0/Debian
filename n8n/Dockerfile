@@ -108,7 +108,6 @@ let aiStudioGuiContext = null;
 let aiStudioGuiPage = null;
 let aiStudioChromeProcess = null;
 let aiStudioLastLaunchUsedCleanProfile = false;
-let aiStudioLaunchStartedAt = 0;
 let fallbackXtermProcess = null;
 let xvfbProcess = null;
 let fluxboxProcess = null;
@@ -353,6 +352,22 @@ function ensureFallbackTerminal() {
   });
 }
 
+async function closeAiStudioContext() {
+  if (aiStudioGuiPage) {
+    try {
+      await aiStudioGuiPage.close();
+    } catch {}
+    aiStudioGuiPage = null;
+  }
+
+  if (aiStudioGuiContext) {
+    try {
+      await aiStudioGuiContext.close();
+    } catch {}
+    aiStudioGuiContext = null;
+  }
+}
+
 function findPlaywrightBundledChromium() {
   const roots = [
     process.env.PLAYWRIGHT_BROWSERS_PATH,
@@ -476,18 +491,7 @@ async function waitForProfileSettled(ms = 2500) {
 async function startAiStudioGui() {
   await ensureDesktopServices();
 
-  const chromePath = getChromeExecutablePath();
-  if (!chromePath) {
-    throw new Error('Không tìm thấy Google Chrome/Chromium executable trong container.');
-  }
-
-  fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
-  resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
-
-  // Quan trọng: nếu Chrome đang chạy thì KHÔNG restore profile nữa.
-  // Restore đè lên profile đang đăng nhập có thể làm AI Studio/Google session lỗi trang
-  // và làm noVNC/websockify bị disconnect do Chrome crash.
-  if (isChildAlive(aiStudioChromeProcess)) {
+  if (aiStudioGuiContext) {
     return {
       ok: true,
       reused: true,
@@ -498,6 +502,14 @@ async function startAiStudioGui() {
       restore: { ok: true, skipped: 'chrome_already_running' },
     };
   }
+
+  const chromePath = getChromeExecutablePath();
+  if (!chromePath) {
+    throw new Error('Không tìm thấy Google Chrome/Chromium executable trong container.');
+  }
+
+  fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
+  resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
 
   const restoreResult = { ok: false, skipped: 'disabled' };
 
@@ -520,54 +532,61 @@ async function startAiStudioGui() {
     runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
   }
 
-  const chromeArgs = [
-    `--user-data-dir=${runtimeProfileSource}`,
-    '--profile-directory=Default',
+  const { chromium } = require('playwright-core');
+  const contextArgs = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
     '--disable-gpu',
     '--disable-software-rasterizer',
-    '--disable-features=RendererCodeIntegrity,SitePerProcess,UseSkiaRenderer,OptimizationHints,MediaRouter,Translate,PushMessaging',
     '--disable-background-networking',
     '--disable-background-timer-throttling',
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding',
     '--disable-component-update',
     '--disable-sync',
-    '--disable-features=VizDisplayCompositor',
+    '--disable-breakpad',
+    '--disable-crash-reporter',
+    '--disable-extensions',
+    '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,PushMessaging',
+    '--password-store=basic',
+    '--use-mock-keychain',
     '--window-size=1365,900',
     '--start-maximized',
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-extensions-except=',
-    '--disable-extensions',
-    '--disable-crash-reporter',
-    '--disable-breakpad',
-    '--password-store=basic',
-    '--use-mock-keychain',
-    '--test-type',
-    '--enable-logging=stderr',
-    '--v=1',
     '--lang=en-US',
-    AI_STUDIO_APP_URL,
   ];
 
-  // Không dùng playwright.launchPersistentContext cho login Google.
-  // Mở Chrome Stable thật qua Xvfb/noVNC để giảm lỗi "browser or app may not be secure".
-  aiStudioChromeProcess = spawnManaged('aistudio-chrome', chromePath, chromeArgs, {
-    stdio: ['ignore', 'ignore', 'pipe'],
-    env: {
-      ...process.env,
-      DISPLAY: DISPLAY_NUM,
-      HOME: '/home/node',
-    },
-  });
+  async function launchPersistent(userDataDir) {
+    return await chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      executablePath: chromePath,
+      args: contextArgs,
+      viewport: { width: 1365, height: 900 },
+      env: {
+        ...process.env,
+        DISPLAY: DISPLAY_NUM,
+        HOME: '/home/node',
+      },
+    });
+  }
 
-  aiStudioLastLaunchUsedCleanProfile = useCleanProfile;
-  aiStudioLaunchStartedAt = Date.now();
+  try {
+    aiStudioGuiContext = await launchPersistent(runtimeProfileSource);
+  } catch (error) {
+    console.error('[aistudio-playwright] first launch failed, retrying with clean runtime profile:', error.message);
+    resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
+    aiStudioLastLaunchUsedCleanProfile = true;
+    try {
+      aiStudioGuiContext = await launchPersistent(AI_STUDIO_RUNTIME_PROFILE_DIR);
+    } catch (retryError) {
+      ensureFallbackTerminal();
+      throw new Error(`Playwright persistent launch failed: ${retryError.message}`);
+    }
+  }
 
-  aiStudioChromeProcess.on('exit', () => {
+  aiStudioGuiContext.on('close', async () => {
     if (fs.existsSync(AI_STUDIO_RUNTIME_PROFILE_DIR) && !aiStudioLastLaunchUsedCleanProfile) {
       try {
         resetDir(AI_STUDIO_PROFILE_DIR);
@@ -576,40 +595,23 @@ async function startAiStudioGui() {
         console.error('[aistudio-profile] failed to sync runtime profile back:', err.message);
       }
     }
-    aiStudioChromeProcess = null;
-    aiStudioLaunchStartedAt = 0;
+    aiStudioGuiContext = null;
+    aiStudioGuiPage = null;
   });
 
-  const stayedAlive = await waitForCondition(() => isChildAlive(aiStudioChromeProcess), 4000, 250);
-  await waitForProfileSettled(1500);
+  const existingPages = aiStudioGuiContext.pages();
+  aiStudioGuiPage = existingPages[0] || await aiStudioGuiContext.newPage();
 
-  if (!stayedAlive || !isChildAlive(aiStudioChromeProcess)) {
-    console.error('[aistudio-chrome] exited too early, retrying once with clean runtime profile');
-    resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
-
-    aiStudioChromeProcess = spawnManaged('aistudio-chrome-retry', chromePath, [
-      ...chromeArgs.filter((arg) => !arg.startsWith('--user-data-dir=')),
-      `--user-data-dir=${AI_STUDIO_RUNTIME_PROFILE_DIR}`,
-    ], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-      env: {
-        ...process.env,
-        DISPLAY: DISPLAY_NUM,
-        HOME: '/home/node',
-      },
+  try {
+    await aiStudioGuiPage.goto(AI_STUDIO_APP_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 90000,
     });
-
-    aiStudioLastLaunchUsedCleanProfile = true;
-    aiStudioLaunchStartedAt = Date.now();
-
-    const retryAlive = await waitForCondition(() => isChildAlive(aiStudioChromeProcess), 4000, 250);
-    await waitForProfileSettled(1500);
-
-    if (!retryAlive || !isChildAlive(aiStudioChromeProcess)) {
-      ensureFallbackTerminal();
-      throw new Error('Chrome did not stay alive on DISPLAY. Open noVNC and inspect /tmp/aistudio-chrome.log');
-    }
+  } catch (navError) {
+    console.error('[aistudio-playwright] goto failed:', navError.message);
   }
+
+  await waitForProfileSettled(1500);
 
   return {
     ok: true,
