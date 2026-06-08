@@ -61,7 +61,7 @@ RUN apt-get update \
     && npm install -g --no-audit --no-fund n8n@2.22.4 \
     && npm init -y >/dev/null 2>&1 \
     && npm install --no-package-lock --no-save --no-audit --no-fund \
-       http-proxy mongoose mongodb pg playwright-core
+      http-proxy mongoose mongodb pg playwright-core
   
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -73,7 +73,6 @@ const os = require('node:os');
 const { execSync, spawn } = require('node:child_process');
 const path = require('node:path');
 const httpProxy = require('http-proxy');
-const { Client: PgClient } = require('pg');
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
 const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
@@ -85,14 +84,7 @@ const CHROME_BIN = process.env.CHROME_BIN || '';
 
 const AI_STUDIO_APP_URL = process.env.AI_STUDIO_APP_URL || 'https://ai.studio/apps/4c2ff89f-3309-4c2c-9613-3058239f23b3';
 const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwright/ai-studio-profile';
-const AI_STUDIO_PROFILE_PARENT = path.dirname(AI_STUDIO_PROFILE_DIR);
-const AI_STUDIO_PROFILE_NAME = path.basename(AI_STUDIO_PROFILE_DIR);
-const AI_STUDIO_PROFILE_ARCHIVE = '/tmp/aistudio-profile-cache.tgz';
 const AI_STUDIO_RUNTIME_PROFILE_DIR = process.env.AI_STUDIO_RUNTIME_PROFILE_DIR || '/tmp/aistudio-profile-runtime';
-const AI_STUDIO_PROFILE_BACKUP_ENABLED = String(process.env.AI_STUDIO_PROFILE_BACKUP_ENABLED || 'true').toLowerCase() !== 'false';
-const AI_STUDIO_PROFILE_SYNC_INTERVAL_MS = Number(process.env.AI_STUDIO_PROFILE_SYNC_INTERVAL_MS || 120000);
-const AI_STUDIO_PROFILE_BACKUP_KEY = process.env.AI_STUDIO_PROFILE_BACKUP_KEY || '';
-const AI_STUDIO_PROFILE_MIN_HEALTHY_MS = Number(process.env.AI_STUDIO_PROFILE_MIN_HEALTHY_MS || 300000);
 
 const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
 const NOVNC_READY_PATH = '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify';
@@ -116,14 +108,11 @@ let aiStudioGuiPage = null;
 let aiStudioChromeProcess = null;
 let aiStudioLastLaunchUsedCleanProfile = false;
 let aiStudioLaunchStartedAt = 0;
-let aiStudioProfileSyncEnabledForSession = false;
 let fallbackXtermProcess = null;
 let xvfbProcess = null;
 let fluxboxProcess = null;
 let x11vncProcess = null;
 let websockifyProcess = null;
-let profileSyncTimer = null;
-let profileBackupInProgress = false;
 
 function spawnManaged(name, command, args, options = {}) {
   const child = spawn(command, args, {
@@ -453,34 +442,6 @@ async function launchChromium(options = {}) {
 }
 
 
-function getAiStudioProfileBackupKey() {
-  return AI_STUDIO_PROFILE_BACKUP_KEY || `${getProjectName()}_aistudio_profile`;
-}
-
-function getPgConfig() {
-  return {
-    host: process.env.DB_POSTGRESDB_HOST,
-    port: Number(process.env.DB_POSTGRESDB_PORT || 5432),
-    database: process.env.DB_POSTGRESDB_DATABASE || 'postgres',
-    user: process.env.DB_POSTGRESDB_USER,
-    password: process.env.DB_POSTGRESDB_PASSWORD,
-    ssl: String(process.env.DB_POSTGRESDB_SSL_ENABLED || 'true').toLowerCase() === 'true'
-      ? { rejectUnauthorized: String(process.env.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED || 'false').toLowerCase() === 'true' }
-      : false,
-  };
-}
-
-async function withPgClient(fn) {
-  const { Client } = require('pg');
-  const client = new Client(getPgConfig());
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end().catch(() => {});
-  }
-}
-
 function hasProfileFiles() {
   try {
     return fs.existsSync(path.join(AI_STUDIO_PROFILE_DIR, 'Default')) ||
@@ -489,138 +450,6 @@ function hasProfileFiles() {
   } catch {
     return false;
   }
-}
-
-async function ensureProfileCacheTable(client) {
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS browser_profile_cache (
-      profile_key TEXT PRIMARY KEY,
-      profile_name TEXT NOT NULL,
-      archive BYTEA NOT NULL,
-      size_bytes BIGINT NOT NULL DEFAULT 0,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-}
-
-async function restoreAiStudioProfileFromDb() {
-  if (!AI_STUDIO_PROFILE_BACKUP_ENABLED) return { ok: false, skipped: 'disabled' };
-
-  fs.mkdirSync(AI_STUDIO_PROFILE_PARENT, { recursive: true });
-  fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
-
-  // Nếu profile hiện tại đã có dữ liệu thì ưu tiên dùng nó, tránh ghi đè session mới.
-  if (hasProfileFiles() && String(process.env.AI_STUDIO_PROFILE_FORCE_RESTORE || 'false').toLowerCase() !== 'true') {
-    return { ok: false, skipped: 'local_profile_exists' };
-  }
-
-  const profileKey = getAiStudioProfileBackupKey();
-
-  return await withPgClient(async (client) => {
-    await ensureProfileCacheTable(client);
-    const result = await client.query(
-      'SELECT archive, size_bytes, updated_at FROM browser_profile_cache WHERE profile_key = $1',
-      [profileKey]
-    );
-
-    if (!result.rows.length) return { ok: false, skipped: 'no_backup_in_db', profileKey };
-
-    const archive = result.rows[0].archive;
-    fs.writeFileSync(AI_STUDIO_PROFILE_ARCHIVE, archive);
-
-    // Xóa thư mục profile cũ rồi giải nén bản mới nhất từ Supabase/Postgres.
-    fs.rmSync(AI_STUDIO_PROFILE_DIR, { recursive: true, force: true });
-    fs.mkdirSync(AI_STUDIO_PROFILE_PARENT, { recursive: true });
-
-    execSync(`tar -xzf ${AI_STUDIO_PROFILE_ARCHIVE} -C ${AI_STUDIO_PROFILE_PARENT}`, {
-      stdio: 'ignore',
-    });
-
-    fs.rmSync(AI_STUDIO_PROFILE_ARCHIVE, { force: true });
-
-    return {
-      ok: true,
-      restored: true,
-      profileKey,
-      sizeBytes: Number(result.rows[0].size_bytes || 0),
-      updatedAt: result.rows[0].updated_at,
-    };
-  });
-}
-
-async function backupAiStudioProfileToDb(reason = 'manual') {
-  if (!AI_STUDIO_PROFILE_BACKUP_ENABLED) return { ok: false, skipped: 'disabled' };
-  if (!aiStudioProfileSyncEnabledForSession && reason !== 'manual' && reason !== 'api') {
-    return { ok: false, skipped: 'session_backup_disabled' };
-  }
-  if (profileBackupInProgress) return { ok: false, skipped: 'backup_in_progress' };
-  if (!hasProfileFiles()) return { ok: false, skipped: 'profile_empty' };
-
-  profileBackupInProgress = true;
-  const profileKey = getAiStudioProfileBackupKey();
-
-  try {
-    fs.rmSync(AI_STUDIO_PROFILE_ARCHIVE, { force: true });
-
-    // Không backup cache nặng; vẫn giữ cookies, Local State, IndexedDB, Extension State.
-    execSync([
-      'tar',
-      '-czf',
-      AI_STUDIO_PROFILE_ARCHIVE,
-      '-C',
-      AI_STUDIO_PROFILE_PARENT,
-      '--exclude=*/Cache/*',
-      '--exclude=*/Code Cache/*',
-      '--exclude=*/GPUCache/*',
-      '--exclude=*/ShaderCache/*',
-      '--exclude=*/Service Worker/CacheStorage/*',
-      '--exclude=*/Crashpad/*',
-      AI_STUDIO_PROFILE_NAME,
-    ].map((x) => `'${String(x).replace(/'/g, "'\\''")}'`).join(' '), {
-      stdio: 'ignore',
-      shell: '/bin/bash',
-    });
-
-    const archive = fs.readFileSync(AI_STUDIO_PROFILE_ARCHIVE);
-    const sizeBytes = archive.length;
-
-    await withPgClient(async (client) => {
-      await ensureProfileCacheTable(client);
-      await client.query(
-        `INSERT INTO browser_profile_cache(profile_key, profile_name, archive, size_bytes, updated_at)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (profile_key)
-         DO UPDATE SET
-           profile_name = EXCLUDED.profile_name,
-           archive = EXCLUDED.archive,
-           size_bytes = EXCLUDED.size_bytes,
-           updated_at = NOW()`,
-        [profileKey, AI_STUDIO_PROFILE_NAME, archive, sizeBytes]
-      );
-    });
-
-    fs.rmSync(AI_STUDIO_PROFILE_ARCHIVE, { force: true });
-
-    console.log(`[aistudio-profile] backup saved reason=${reason} key=${profileKey} size=${sizeBytes}`);
-    return { ok: true, saved: true, reason, profileKey, sizeBytes };
-  } catch (err) {
-    console.error('[aistudio-profile] backup failed:', err.message);
-    return { ok: false, error: err.message, profileKey };
-  } finally {
-    profileBackupInProgress = false;
-  }
-}
-
-function startAiStudioProfileAutoSync() {
-  if (!AI_STUDIO_PROFILE_BACKUP_ENABLED || profileSyncTimer) return;
-
-  profileSyncTimer = setInterval(() => {
-    backupAiStudioProfileToDb('interval').catch((err) => {
-      console.error('[aistudio-profile] interval backup error:', err.message);
-    });
-  }, Math.max(30000, AI_STUDIO_PROFILE_SYNC_INTERVAL_MS));
-
-  profileSyncTimer.unref?.();
 }
 
 function getChromeExecutablePath() {
@@ -658,8 +487,6 @@ async function startAiStudioGui() {
   // Restore đè lên profile đang đăng nhập có thể làm AI Studio/Google session lỗi trang
   // và làm noVNC/websockify bị disconnect do Chrome crash.
   if (isChildAlive(aiStudioChromeProcess)) {
-    startAiStudioProfileAutoSync();
-
     return {
       ok: true,
       reused: true,
@@ -668,17 +495,10 @@ async function startAiStudioGui() {
       profileDir: AI_STUDIO_PROFILE_DIR,
       browser: chromePath,
       restore: { ok: true, skipped: 'chrome_already_running' },
-      profileBackupKey: getAiStudioProfileBackupKey(),
     };
   }
 
-  let restoreResult = { ok: false, skipped: 'local_profile_exists' };
-  if (!hasProfileFiles()) {
-    restoreResult = await restoreAiStudioProfileFromDb().catch((err) => ({
-      ok: false,
-      error: err.message,
-    }));
-  }
+  const restoreResult = { ok: false, skipped: 'disabled' };
 
   let runtimeProfileSource = AI_STUDIO_PROFILE_DIR;
   if (hasProfileFiles()) {
@@ -698,7 +518,6 @@ async function startAiStudioGui() {
     resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
     runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
   }
-  aiStudioProfileSyncEnabledForSession = !useCleanProfile;
 
   const chromeArgs = [
     `--user-data-dir=${runtimeProfileSource}`,
@@ -748,26 +567,13 @@ async function startAiStudioGui() {
   aiStudioLaunchStartedAt = Date.now();
 
   aiStudioChromeProcess.on('exit', () => {
-    const sessionAliveMs = aiStudioLaunchStartedAt ? Date.now() - aiStudioLaunchStartedAt : 0;
-    const sessionWasHealthyEnough = sessionAliveMs >= AI_STUDIO_PROFILE_MIN_HEALTHY_MS;
-
-    if (
-      fs.existsSync(AI_STUDIO_RUNTIME_PROFILE_DIR) &&
-      !aiStudioLastLaunchUsedCleanProfile &&
-      aiStudioProfileSyncEnabledForSession &&
-      sessionWasHealthyEnough
-    ) {
+    if (fs.existsSync(AI_STUDIO_RUNTIME_PROFILE_DIR) && !aiStudioLastLaunchUsedCleanProfile) {
       try {
         resetDir(AI_STUDIO_PROFILE_DIR);
         copyDirContents(AI_STUDIO_RUNTIME_PROFILE_DIR, AI_STUDIO_PROFILE_DIR);
       } catch (err) {
         console.error('[aistudio-profile] failed to sync runtime profile back:', err.message);
       }
-    }
-    if (sessionWasHealthyEnough) {
-      backupAiStudioProfileToDb('chrome_exit').catch(() => {});
-    } else {
-      console.warn(`[aistudio-profile] skip chrome_exit backup; session alive only ${sessionAliveMs}ms`);
     }
     aiStudioChromeProcess = null;
     aiStudioLaunchStartedAt = 0;
@@ -793,7 +599,6 @@ async function startAiStudioGui() {
     });
 
     aiStudioLastLaunchUsedCleanProfile = true;
-    aiStudioProfileSyncEnabledForSession = false;
     aiStudioLaunchStartedAt = Date.now();
 
     const retryAlive = await waitForCondition(() => isChildAlive(aiStudioChromeProcess), 4000, 250);
@@ -805,8 +610,6 @@ async function startAiStudioGui() {
     }
   }
 
-  startAiStudioProfileAutoSync();
-
   return {
     ok: true,
     reused: false,
@@ -815,7 +618,6 @@ async function startAiStudioGui() {
     profileDir: AI_STUDIO_PROFILE_DIR,
     browser: chromePath,
     restore: restoreResult,
-    profileBackupKey: getAiStudioProfileBackupKey(),
   };
 }
 
@@ -2054,22 +1856,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/aistudio/profile/backup') {
-    try {
-      const result = await backupAiStudioProfileToDb('api');
-      sendJson(res, 200, result);
-    } catch (err) {
-      sendJson(res, 500, { ok: false, error: err.message });
-    }
+    sendJson(res, 410, { ok: false, error: 'Profile backup feature removed' });
     return;
   }
 
   if (url.pathname === '/api/aistudio/profile/restore') {
-    try {
-      const result = await restoreAiStudioProfileFromDb();
-      sendJson(res, 200, result);
-    } catch (err) {
-      sendJson(res, 500, { ok: false, error: err.message });
-    }
+    sendJson(res, 410, { ok: false, error: 'Profile restore feature removed' });
     return;
   }
 
@@ -2079,8 +1871,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         profileDir: AI_STUDIO_PROFILE_DIR,
         profileExists: hasProfileFiles(),
-        backupEnabled: AI_STUDIO_PROFILE_BACKUP_ENABLED,
-        profileBackupKey: getAiStudioProfileBackupKey(),
+        backupEnabled: false,
         chromeRunning: Boolean(aiStudioChromeProcess && !aiStudioChromeProcess.killed),
       });
     } catch (err) {
