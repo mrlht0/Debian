@@ -65,6 +65,7 @@ let xvfbProcess = null;
 let fluxboxProcess = null;
 let x11vncProcess = null;
 let websockifyProcess = null;
+let fallbackXtermProcess = null;
 let mongoose = null;
 let CostHistory = null;
 
@@ -212,6 +213,27 @@ function writeFileIfMissing(filePath, content) {
   if (!fs.existsSync(filePath)) {
     fs.writeFileSync(filePath, content, 'utf8');
   }
+}
+
+function ensureFallbackTerminal() {
+  if (isChildAlive(fallbackXtermProcess)) return;
+
+  fallbackXtermProcess = spawnManaged('desktop-xterm', 'xterm', [
+    '-geometry',
+    '120x30+40+40',
+    '-fa',
+    'Monospace',
+    '-fs',
+    '11',
+    '-title',
+    'Playwright Desktop',
+    '-e',
+    'bash',
+    '-lc',
+    'echo "Desktop is ready."; echo "If browser is missing, inspect service logs."; tail -f /tmp/x11vnc.log',
+  ], {
+    env: { ...process.env, DISPLAY: DISPLAY_NUM, HOME: '/home/node' },
+  });
 }
 
 function shellOk(command) {
@@ -714,6 +736,7 @@ async function startBrowser(targetUrl) {
   if (browserContext) {
     if (targetUrl && browserPage) {
       await browserPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
+      await browserPage.bringToFront().catch(() => {});
     }
     return { ok: true, reused: true, noVncPath: NOVNC_READY_PATH, url: targetUrl || browserPage?.url() || '' };
   }
@@ -725,24 +748,30 @@ async function startBrowser(targetUrl) {
   const StealthPlugin = require('puppeteer-extra-plugin-stealth');
   chromium.use(StealthPlugin());
 
-  browserContext = await chromium.launchPersistentContext(BROWSER_PROFILE_DIR, {
-    headless: false,
-    executablePath: chromePath,
-    args: [
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-software-rasterizer',
-      '--window-size=1365,900',
-      '--start-maximized',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--password-store=basic',
-      '--use-mock-keychain',
-    ],
-    viewport: { width: 1365, height: 900 },
-    env: { ...process.env, DISPLAY: DISPLAY_NUM, HOME: '/home/node' },
-  });
+  try {
+    browserContext = await chromium.launchPersistentContext(BROWSER_PROFILE_DIR, {
+      headless: false,
+      executablePath: chromePath,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--window-size=1365,900',
+        '--start-maximized',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--password-store=basic',
+        '--use-mock-keychain',
+      ],
+      viewport: { width: 1365, height: 900 },
+      env: { ...process.env, DISPLAY: DISPLAY_NUM, HOME: '/home/node' },
+    });
+  } catch (err) {
+    ensureFallbackTerminal();
+    throw new Error(`Browser launch failed at ${chromePath}: ${err.message}`);
+  }
 
   browserContext.on('close', () => {
     browserContext = null;
@@ -750,10 +779,10 @@ async function startBrowser(targetUrl) {
   });
 
   browserPage = browserContext.pages()[0] || await browserContext.newPage();
-  if (targetUrl) {
-    await browserPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
-  }
-  return { ok: true, reused: false, noVncPath: NOVNC_READY_PATH, url: targetUrl || browserPage.url() || '' };
+  const finalUrl = targetUrl || 'about:blank';
+  await browserPage.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
+  await browserPage.bringToFront().catch(() => {});
+  return { ok: true, reused: false, noVncPath: NOVNC_READY_PATH, url: browserPage.url() || finalUrl, chromePath };
 }
 
 async function closeBrowser() {
@@ -885,6 +914,14 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/websockify' || url.pathname.startsWith('/novnc/')) {
     try {
+      if (url.pathname === '/novnc/vnc.html' || url.pathname.endsWith('/vnc.html')) {
+        try {
+          await startBrowser(url.searchParams.get('url') || '');
+        } catch (err) {
+          ensureFallbackTerminal();
+          console.error('[novnc] failed to auto-open browser:', err.message);
+        }
+      }
       await ensureDesktopServices();
       if (url.pathname.startsWith('/novnc/')) {
         req.url = req.url.replace(/^\/novnc/, '') || '/';
