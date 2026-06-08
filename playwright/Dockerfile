@@ -32,7 +32,7 @@ RUN apt-get update \
     && if ! id -u node >/dev/null 2>&1; then useradd -m -s /bin/bash node; fi \
     && npm init -y >/dev/null 2>&1 \
     && npm install --no-package-lock --no-save --no-audit --no-fund \
-      http-proxy playwright playwright-core playwright-extra puppeteer-extra-plugin-stealth
+      http-proxy mongoose mongodb playwright playwright-core playwright-extra puppeteer-extra-plugin-stealth
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -53,6 +53,10 @@ const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
 const BROWSER_PROFILE_DIR = process.env.BROWSER_PROFILE_DIR || '/data/playwright/browser-profile';
 const UPLOAD_DIR = '/app/uploads';
 const NOVNC_READY_PATH = '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify';
+const MONGODB_URI =
+  process.env.MONGODB_URI ||
+  'mongodb+srv://tylauj04:t482169@cluster0.ygab0.mongodb.net';
+const TARGET_DB = process.env.TARGET_DB || 'application-manager';
 
 const childProcesses = [];
 let browserContext = null;
@@ -61,6 +65,8 @@ let xvfbProcess = null;
 let fluxboxProcess = null;
 let x11vncProcess = null;
 let websockifyProcess = null;
+let mongoose = null;
+let CostHistory = null;
 
 const toMB = (bytes) => (bytes / 1024 / 1024).toFixed(2);
 const toGB = (bytes) => (bytes / 1024 / 1024 / 1024).toFixed(2);
@@ -90,6 +96,74 @@ function sendText(res, code, text) {
     'Content-Type': 'text/plain; charset=utf-8',
   });
   res.end(text);
+}
+
+function sanitizeId(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function getStableMachineId() {
+  if (process.env.MACHINE_ID) {
+    return sanitizeId(process.env.MACHINE_ID);
+  }
+  if (process.env.RAILWAY_SERVICE_ID) {
+    return `railway_${sanitizeId(process.env.RAILWAY_SERVICE_ID)}`;
+  }
+  if (process.env.RAILWAY_PROJECT_ID && process.env.RAILWAY_SERVICE_NAME) {
+    return `railway_${sanitizeId(process.env.RAILWAY_PROJECT_ID)}_${sanitizeId(process.env.RAILWAY_SERVICE_NAME)}`;
+  }
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    return `railway_${sanitizeId(process.env.RAILWAY_PUBLIC_DOMAIN)}`;
+  }
+  if (process.env.RAILWAY_STATIC_URL) {
+    return `railway_${sanitizeId(process.env.RAILWAY_STATIC_URL)}`;
+  }
+  if (process.env.RENDER_SERVICE_ID) {
+    return `render_${sanitizeId(process.env.RENDER_SERVICE_ID)}`;
+  }
+  if (process.env.RENDER_EXTERNAL_URL) {
+    try {
+      return `render_${sanitizeId(new URL(process.env.RENDER_EXTERNAL_URL).hostname)}`;
+    } catch {}
+  }
+  if (process.env.FLY_APP_NAME) {
+    return `fly_${sanitizeId(process.env.FLY_APP_NAME)}`;
+  }
+  if (process.env.KOYEB_SERVICE_NAME) {
+    return `koyeb_${sanitizeId(process.env.KOYEB_SERVICE_NAME)}`;
+  }
+  if (process.env.COOLIFY_FQDN) {
+    return `coolify_${sanitizeId(process.env.COOLIFY_FQDN)}`;
+  }
+
+  const publicCandidates = [
+    process.env.PUBLIC_DOMAIN,
+    process.env.PUBLIC_URL,
+    process.env.APP_URL,
+    process.env.BASE_URL,
+  ];
+
+  for (const raw of publicCandidates) {
+    if (!raw) continue;
+    try {
+      let value = String(raw).trim();
+      if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+      const host = new URL(value).hostname;
+      if (host && !host.includes('localhost') && !host.startsWith('127.') && !host.startsWith('0.0.0.0')) {
+        return `domain_${sanitizeId(host)}`;
+      }
+    } catch {}
+  }
+
+  return `vps_${sanitizeId(os.hostname() || 'unknown')}`;
+}
+
+function getProjectName() {
+  return getStableMachineId();
 }
 
 const novncProxy = httpProxy.createProxyServer({
@@ -283,6 +357,60 @@ function readIntFile(filePath) {
   }
 }
 
+function loadMongoose() {
+  if (mongoose) return mongoose;
+  mongoose = require('mongoose');
+  const schema = new mongoose.Schema(
+    {
+      month: { type: String, required: true },
+      projectName: { type: String, required: true, default: 'unknown' },
+      accumulatedMemoryMinutes: { type: Number, default: 0 },
+      accumulatedCpuMinutes: { type: Number, default: 0 },
+      accumulatedEgressBytes: { type: Number, default: 0 },
+      lastTxBytes: { type: Number, default: 0 },
+      lastMeasurementTime: { type: Date, default: Date.now },
+      memoryCost: { type: Number, default: 0 },
+      cpuCost: { type: Number, default: 0 },
+      egressCost: { type: Number, default: 0 },
+      totalCost: { type: Number, default: 0 },
+    },
+    { timestamps: true }
+  );
+  schema.index({ month: 1, projectName: 1 }, { unique: true });
+  CostHistory = mongoose.models.CostHistory || mongoose.model('CostHistory', schema);
+  return mongoose;
+}
+
+async function connectToMongo() {
+  if (!MONGODB_URI) return false;
+  const lib = loadMongoose();
+  if (lib.connection.readyState >= 1) return true;
+
+  let uri = MONGODB_URI;
+  try {
+    const u = new URL(MONGODB_URI);
+    u.pathname = `/${TARGET_DB}`;
+    uri = u.toString();
+  } catch {
+    const [base, qs] = MONGODB_URI.split('?');
+    uri = `${base.replace(/\/+$/, '')}/${TARGET_DB}?${qs || 'retryWrites=true&w=majority'}`;
+  }
+
+  await lib.connect(uri);
+  return true;
+}
+
+async function migrateCostHistoryIndexes() {
+  if (!mongoose?.connection?.db) return;
+  try {
+    const collection = mongoose.connection.db.collection('costhistories');
+    const indexes = await collection.indexes();
+    if (indexes.some((idx) => idx.name === 'month_1')) {
+      await collection.dropIndex('month_1');
+    }
+  } catch {}
+}
+
 function getCurrentTxBytes() {
   let total = 0;
   try {
@@ -397,6 +525,9 @@ async function measureCpuPercent() {
 }
 
 async function buildMonitorStats() {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
   const mem = process.memoryUsage();
   const tracked = getTrackedProcessStats();
   const cgroup = getCgroupStats();
@@ -405,12 +536,24 @@ async function buildMonitorStats() {
   const cpu = await measureCpuPercent();
   return {
     identity: {
+      name: getProjectName(),
+      machineId: getProjectName(),
       service: 'playwright-only',
       hostname: os.hostname(),
       platform: os.platform(),
       arch: os.arch(),
+      ips: Object.values(os.networkInterfaces())
+        .flat()
+        .filter((f) => f && !f.internal && f.family === 'IPv4')
+        .map((f) => f.address),
     },
     cpu,
+    os: {
+      total: `${toGB(totalMem)} GB`,
+      free: `${toGB(freeMem)} GB`,
+      used: `${toGB(usedMem)} GB`,
+      usedPercentage: `${((usedMem / totalMem) * 100).toFixed(2)}%`,
+    },
     node: {
       heapTotal: `${toMB(mem.heapTotal)} MB`,
       heapUsed: `${toMB(mem.heapUsed)} MB`,
@@ -419,24 +562,113 @@ async function buildMonitorStats() {
       rssBytes: mem.rss,
     },
     tracked: {
+      totalTrackedRss: `${toMB(tracked.totalTrackedRssBytes)} MB`,
       totalTrackedRssMb: Number(toMB(tracked.totalTrackedRssBytes)),
       totalTrackedRssBytes: tracked.totalTrackedRssBytes,
       processes: tracked.trackedProcesses,
     },
     container: {
+      memoryCurrent: cgroup.memoryCurrentBytes != null ? `${toMB(cgroup.memoryCurrentBytes)} MB` : null,
       memoryCurrentMb: cgroup.memoryCurrentBytes != null ? Number(toMB(cgroup.memoryCurrentBytes)) : null,
       memoryCurrentBytes: cgroup.memoryCurrentBytes,
+      memoryLimit: cgroup.memoryMaxBytes != null ? `${toMB(cgroup.memoryMaxBytes)} MB` : null,
       memoryLimitMb: cgroup.memoryMaxBytes != null ? Number(toMB(cgroup.memoryMaxBytes)) : null,
       memoryLimitBytes: cgroup.memoryMaxBytes,
       cpuUsageUsec: cgroup.cpuUsageUsec,
       networkTxBytes: txBytes,
       networkRxBytes: rxBytes,
+      networkTx: `${(txBytes / 1024 / 1024 / 1024).toFixed(4)} GB`,
+      networkRx: `${(rxBytes / 1024 / 1024 / 1024).toFixed(4)} GB`,
       networkTxGb: Number((txBytes / 1024 / 1024 / 1024).toFixed(4)),
       networkRxGb: Number((rxBytes / 1024 / 1024 / 1024).toFixed(4)),
     },
+    freeCommandOutput: safeExec('free -h'),
     topProcesses: safeExec('ps aux --sort=-%mem | head -n 10').split('\n').filter(Boolean),
     timestamp: new Date().toISOString(),
   };
+}
+
+async function updateCostHistory(rssBytes) {
+  if (!MONGODB_URI) {
+    return { currentMonth: null, last5MonthsHistory: [], disabled: true };
+  }
+
+  try {
+    await connectToMongo();
+    await migrateCostHistoryIndexes();
+
+    const now = new Date();
+    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const projectName = getProjectName();
+    const currentTxBytes = getCurrentTxBytes();
+
+    let record = await CostHistory.findOne({ month: currentMonthStr, projectName });
+    if (!record) {
+      record = new CostHistory({
+        month: currentMonthStr,
+        projectName,
+        lastMeasurementTime: now,
+        lastTxBytes: currentTxBytes,
+      });
+      await record.save();
+    }
+
+    const minutesElapsed = (now.getTime() - new Date(record.lastMeasurementTime).getTime()) / 60000;
+    if (minutesElapsed > 0.01) {
+      record.accumulatedMemoryMinutes += (rssBytes / 1024 / 1024 / 1024) * minutesElapsed;
+      const allocatedCpu = Number(process.env.ALLOCATED_CPU || 0.1);
+      record.accumulatedCpuMinutes += allocatedCpu * minutesElapsed;
+      if (currentTxBytes > 0 && record.lastTxBytes > 0 && currentTxBytes >= record.lastTxBytes) {
+        record.accumulatedEgressBytes += currentTxBytes - record.lastTxBytes;
+      }
+      record.lastTxBytes = currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
+      record.lastMeasurementTime = now;
+      record.memoryCost = record.accumulatedMemoryMinutes * 0.000462;
+      record.cpuCost = record.accumulatedCpuMinutes * 0.000926;
+      record.egressCost = (record.accumulatedEgressBytes / 1024 / 1024 / 1024) * 0.1;
+      record.totalCost = record.memoryCost + record.cpuCost + record.egressCost;
+      await record.save();
+    }
+
+    const allocatedCpu = Number(process.env.ALLOCATED_CPU || 0.1);
+    const activeMinutes = allocatedCpu > 0 ? record.accumulatedCpuMinutes / allocatedCpu : 0;
+    const d = Math.floor(activeMinutes / 1440);
+    const h = Math.floor((activeMinutes % 1440) / 60);
+    const m = Math.floor(activeMinutes % 60);
+
+    const history = await CostHistory.find({ projectName }).sort({ month: -1 }).limit(5);
+    return {
+      currentMonth: {
+        projectName: record.projectName,
+        machineId: record.projectName,
+        month: record.month,
+        runningDuration: `${d}d ${h}h ${m}m`,
+        runningDays: `${(activeMinutes / 1440).toFixed(2)} days`,
+        accumulatedMemoryGBMinutes: record.accumulatedMemoryMinutes.toFixed(2),
+        accumulatedCpuVCPUMinutes: record.accumulatedCpuMinutes.toFixed(2),
+        accumulatedEgressGB: (record.accumulatedEgressBytes / 1024 / 1024 / 1024).toFixed(4),
+        ramCost: `$${record.memoryCost.toFixed(4)}`,
+        cpuCost: `$${record.cpuCost.toFixed(4)}`,
+        networkCost: `$${record.egressCost.toFixed(4)}`,
+        totalCost: `$${record.totalCost.toFixed(4)}`,
+      },
+      last5MonthsHistory: history.map((hist) => {
+        const hAct = allocatedCpu > 0 ? hist.accumulatedCpuMinutes / allocatedCpu : 0;
+        return {
+          projectName: hist.projectName,
+          machineId: hist.projectName,
+          month: hist.month,
+          runningDuration: `${Math.floor(hAct / 1440)}d ${Math.floor((hAct % 1440) / 60)}h ${Math.floor(hAct % 60)}m`,
+          ramCost: `$${(hist.memoryCost || 0).toFixed(4)}`,
+          cpuCost: `$${(hist.cpuCost || 0).toFixed(4)}`,
+          networkCost: `$${(hist.egressCost || 0).toFixed(4)}`,
+          totalCost: `$${(hist.totalCost || 0).toFixed(4)}`,
+        };
+      }),
+    };
+  } catch (err) {
+    return { currentMonth: null, last5MonthsHistory: [], error: err.message };
+  }
 }
 
 function findPlaywrightBundledChromium() {
@@ -583,7 +815,21 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 401, { error: 'Unauthorized' });
       return;
     }
-    sendJson(res, 200, await buildMonitorStats());
+    const stats = await buildMonitorStats();
+    const rssBytes = stats.container.memoryCurrentBytes || stats.tracked.totalTrackedRssBytes || stats.node.rssBytes;
+    const projectCost = await updateCostHistory(rssBytes);
+    sendJson(res, 200, {
+      identity: stats.identity,
+      cpu: stats.cpu,
+      os: stats.os,
+      node: stats.node,
+      tracked: stats.tracked,
+      container: stats.container,
+      timestamp: stats.timestamp,
+      ...(stats.freeCommandOutput ? { freeCommandOutput: stats.freeCommandOutput } : {}),
+      ...(stats.topProcesses ? { topProcesses: stats.topProcesses } : {}),
+      projectCost,
+    });
     return;
   }
 
