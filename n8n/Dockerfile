@@ -1078,6 +1078,76 @@ function safeExec(cmd) {
   }
 }
 
+function getTrackedPidList() {
+  const pids = new Set([process.pid]);
+
+  if (n8nChild?.pid) pids.add(n8nChild.pid);
+
+  for (const child of childProcesses) {
+    if (child?.pid) pids.add(child.pid);
+  }
+
+  return [...pids].filter((pid) => Number.isFinite(pid));
+}
+
+function parsePsTable(output) {
+  return String(output || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      if (!match) return null;
+      return {
+        pid: Number(match[1]),
+        rssKb: Number(match[2]),
+        command: match[3],
+      };
+    })
+    .filter(Boolean);
+}
+
+function getTrackedProcessStats() {
+  if (process.platform !== 'linux') {
+    return {
+      trackedProcesses: [],
+      totalTrackedRssBytes: 0,
+    };
+  }
+
+  const pids = getTrackedPidList();
+  if (!pids.length) {
+    return {
+      trackedProcesses: [],
+      totalTrackedRssBytes: 0,
+    };
+  }
+
+  const output = safeExec(`ps -o pid=,rss=,args= -p ${pids.join(',')}`);
+  const trackedProcesses = parsePsTable(output).map((row) => ({
+    pid: row.pid,
+    rssMb: Number((row.rssKb / 1024).toFixed(2)),
+    rssBytes: row.rssKb * 1024,
+    command: row.command,
+  }));
+
+  return {
+    trackedProcesses,
+    totalTrackedRssBytes: trackedProcesses.reduce((sum, row) => sum + row.rssBytes, 0),
+  };
+}
+
+function getTopProcessesByRss(limit = 10) {
+  if (process.platform !== 'linux') return [];
+
+  const output = safeExec(`ps -eo pid=,rss=,comm=,args= --sort=-rss | head -n ${Math.max(limit, 1)}`);
+  return parsePsTable(output).map((row) => ({
+    pid: row.pid,
+    rssMb: Number((row.rssKb / 1024).toFixed(2)),
+    command: row.command,
+  }));
+}
+
 async function measureCpuPercent() {
   const startCpu = os.cpus();
   const startUsage = process.cpuUsage();
@@ -1151,6 +1221,7 @@ async function buildMonitorStats() {
   const cpu = await measureCpuPercent();
   const mem = process.memoryUsage();
   const projectName = getProjectName();
+  const tracked = getTrackedProcessStats();
 
   const stats = {
     cpu,
@@ -1164,6 +1235,16 @@ async function buildMonitorStats() {
       heapTotal: `${toMB(mem.heapTotal)} MB`,
       heapUsed: `${toMB(mem.heapUsed)} MB`,
       rss: `${toMB(mem.rss)} MB`,
+      rssBytes: mem.rss,
+    },
+    tracked: {
+      wrapperRssMb: Number(toMB(mem.rss)),
+      wrapperRssBytes: mem.rss,
+      childProcessesRssMb: Number(toMB(Math.max(0, tracked.totalTrackedRssBytes - mem.rss))),
+      childProcessesRssBytes: Math.max(0, tracked.totalTrackedRssBytes - mem.rss),
+      totalTrackedRssMb: Number(toMB(tracked.totalTrackedRssBytes)),
+      totalTrackedRssBytes: tracked.totalTrackedRssBytes,
+      processes: tracked.trackedProcesses,
     },
     timestamp: new Date().toISOString(),
   };
@@ -1176,6 +1257,9 @@ async function buildMonitorStats() {
     const ps = safeExec('ps aux --sort=-%mem | head -n 6');
 
     if (ps) stats.topProcesses = ps.split('\n');
+
+    const topByRss = getTopProcessesByRss(10);
+    if (topByRss.length) stats.topProcessesByRss = topByRss;
 
     const logPaths = [
       '/tmp/mem_guard.log',
@@ -1210,7 +1294,7 @@ async function buildMonitorStats() {
 
   return {
     stats,
-    rssBytes: mem.rss,
+    rssBytes: tracked.totalTrackedRssBytes || mem.rss,
   };
 }
 
