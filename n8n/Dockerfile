@@ -1214,6 +1214,83 @@ function getCurrentTxBytes() {
   return total;
 }
 
+function readIntFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf8').trim();
+    if (!raw || raw === 'max') return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function getCurrentRxBytes() {
+  if (process.platform !== 'linux') return 0;
+
+  let total = 0;
+
+  try {
+    const base = '/sys/class/net';
+    const interfaces = fs.readdirSync(base);
+
+    for (const iface of interfaces) {
+      if (iface === 'lo') continue;
+
+      const rxPath = `${base}/${iface}/statistics/rx_bytes`;
+
+      if (fs.existsSync(rxPath)) {
+        const value = parseInt(fs.readFileSync(rxPath, 'utf8').trim(), 10);
+        if (Number.isFinite(value)) total += value;
+      }
+    }
+  } catch {}
+
+  return total;
+}
+
+function getCgroupStats() {
+  if (process.platform !== 'linux') {
+    return {
+      memoryCurrentBytes: null,
+      memoryMaxBytes: null,
+      cpuUsageUsec: null,
+    };
+  }
+
+  const memoryCurrentBytes =
+    readIntFile('/sys/fs/cgroup/memory.current') ??
+    readIntFile('/sys/fs/cgroup/memory/memory.usage_in_bytes');
+
+  const memoryMaxBytes =
+    readIntFile('/sys/fs/cgroup/memory.max') ??
+    readIntFile('/sys/fs/cgroup/memory/memory.limit_in_bytes');
+
+  let cpuUsageUsec = null;
+
+  try {
+    const cpuStatPath = fs.existsSync('/sys/fs/cgroup/cpu.stat')
+      ? '/sys/fs/cgroup/cpu.stat'
+      : '/sys/fs/cgroup/cpu/cpuacct.usage';
+
+    if (cpuStatPath.endsWith('cpu.stat')) {
+      const raw = fs.readFileSync(cpuStatPath, 'utf8');
+      const match = raw.match(/^usage_usec\s+(\d+)$/m);
+      if (match) cpuUsageUsec = Number(match[1]);
+    } else {
+      const usageNsec = readIntFile(cpuStatPath);
+      if (usageNsec != null) cpuUsageUsec = Math.round(usageNsec / 1000);
+    }
+  } catch {}
+
+  return {
+    memoryCurrentBytes,
+    memoryMaxBytes,
+    cpuUsageUsec,
+  };
+}
+
 async function buildMonitorStats() {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
@@ -1222,6 +1299,9 @@ async function buildMonitorStats() {
   const mem = process.memoryUsage();
   const projectName = getProjectName();
   const tracked = getTrackedProcessStats();
+  const cgroup = getCgroupStats();
+  const txBytes = getCurrentTxBytes();
+  const rxBytes = getCurrentRxBytes();
 
   const stats = {
     cpu,
@@ -1245,6 +1325,19 @@ async function buildMonitorStats() {
       totalTrackedRssMb: Number(toMB(tracked.totalTrackedRssBytes)),
       totalTrackedRssBytes: tracked.totalTrackedRssBytes,
       processes: tracked.trackedProcesses,
+    },
+    container: {
+      memoryCurrentMb:
+        cgroup.memoryCurrentBytes != null ? Number(toMB(cgroup.memoryCurrentBytes)) : null,
+      memoryCurrentBytes: cgroup.memoryCurrentBytes,
+      memoryLimitMb:
+        cgroup.memoryMaxBytes != null ? Number(toMB(cgroup.memoryMaxBytes)) : null,
+      memoryLimitBytes: cgroup.memoryMaxBytes,
+      cpuUsageUsec: cgroup.cpuUsageUsec,
+      networkTxBytes: txBytes,
+      networkRxBytes: rxBytes,
+      networkTxGb: Number((txBytes / 1024 / 1024 / 1024).toFixed(4)),
+      networkRxGb: Number((rxBytes / 1024 / 1024 / 1024).toFixed(4)),
     },
     timestamp: new Date().toISOString(),
   };
@@ -1294,7 +1387,7 @@ async function buildMonitorStats() {
 
   return {
     stats,
-    rssBytes: tracked.totalTrackedRssBytes || mem.rss,
+    rssBytes: cgroup.memoryCurrentBytes || tracked.totalTrackedRssBytes || mem.rss,
   };
 }
 
@@ -1477,6 +1570,8 @@ async function handleRamRequest(req, res) {
     cpu: stats.cpu,
     os: stats.os,
     node: stats.node,
+    tracked: stats.tracked,
+    container: stats.container,
     timestamp: stats.timestamp,
     ...(stats.freeCommandOutput
       ? {
