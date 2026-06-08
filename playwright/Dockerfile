@@ -32,7 +32,7 @@ RUN apt-get update \
     && if ! id -u node >/dev/null 2>&1; then useradd -m -s /bin/bash node; fi \
     && npm init -y >/dev/null 2>&1 \
     && npm install --no-package-lock --no-save --no-audit --no-fund \
-      playwright playwright-core playwright-extra puppeteer-extra-plugin-stealth
+      http-proxy playwright playwright-core playwright-extra puppeteer-extra-plugin-stealth
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -43,6 +43,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { execSync, spawn } = require('node:child_process');
+const httpProxy = require('http-proxy');
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
 const DISPLAY_NUM = process.env.DISPLAY || ':99';
@@ -51,7 +52,7 @@ const VNC_PORT = Number(process.env.VNC_INTERNAL_PORT || 5900);
 const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
 const BROWSER_PROFILE_DIR = process.env.BROWSER_PROFILE_DIR || '/data/playwright/browser-profile';
 const UPLOAD_DIR = '/app/uploads';
-const NOVNC_READY_PATH = '/novnc/vnc_lite.html?autoconnect=true&resize=scale&path=websockify';
+const NOVNC_READY_PATH = '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify';
 
 const childProcesses = [];
 let browserContext = null;
@@ -90,6 +91,19 @@ function sendText(res, code, text) {
   });
   res.end(text);
 }
+
+const novncProxy = httpProxy.createProxyServer({
+  target: `http://127.0.0.1:${NOVNC_PORT}`,
+  ws: true,
+  xfwd: true,
+  changeOrigin: false,
+});
+
+novncProxy.on('error', (err, req, res) => {
+  if (res && !res.headersSent) {
+    sendText(res, 502, `noVNC proxy error: ${err.message}`);
+  }
+});
 
 function spawnManaged(name, command, args, options = {}) {
   const child = spawn(command, args, {
@@ -425,12 +439,40 @@ async function buildMonitorStats() {
   };
 }
 
+function findPlaywrightBundledChromium() {
+  const roots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    '/ms-playwright',
+  ].filter(Boolean);
+
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+      const dirs = fs.readdirSync(root).filter((name) => name.startsWith('chromium'));
+      for (const dir of dirs) {
+        const candidates = [
+          path.join(root, dir, 'chrome-linux', 'chrome'),
+          path.join(root, dir, 'chrome-linux-headless-shell', 'headless_shell'),
+        ];
+        for (const candidate of candidates) {
+          if (fs.existsSync(candidate)) return candidate;
+        }
+      }
+    } catch {}
+  }
+
+  return '';
+}
+
 function getChromeExecutablePath() {
   const candidates = [
     process.env.GOOGLE_CHROME_BIN,
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/opt/google/chrome/chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    findPlaywrightBundledChromium(),
   ];
   return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || '';
 }
@@ -530,7 +572,7 @@ async function saveUploadedFile(req) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
 
-  if (url.pathname === '/healthz') {
+  if (url.pathname === '/' || url.pathname === '/healthz') {
     sendJson(res, 200, { ok: true, service: 'playwright-only', browserRunning: Boolean(browserContext) });
     return;
   }
@@ -590,7 +632,43 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/novnc/package.json') {
+    sendJson(res, 200, { name: 'novnc', version: 'container' });
+    return;
+  }
+
+  if (url.pathname === '/websockify' || url.pathname.startsWith('/novnc/')) {
+    try {
+      await ensureDesktopServices();
+      if (url.pathname.startsWith('/novnc/')) {
+        req.url = req.url.replace(/^\/novnc/, '') || '/';
+      }
+      novncProxy.web(req, res);
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
   sendJson(res, 404, { ok: false, error: 'Not found' });
+});
+
+server.on('upgrade', (req, socket, head) => {
+  const reqUrl = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+
+  if (reqUrl.pathname === '/websockify' || reqUrl.pathname.startsWith('/novnc/')) {
+    ensureDesktopServices()
+      .then(() => {
+        if (reqUrl.pathname.startsWith('/novnc/')) {
+          req.url = req.url.replace(/^\/novnc/, '') || '/';
+        }
+        novncProxy.ws(req, socket, head);
+      })
+      .catch(() => socket.destroy());
+    return;
+  }
+
+  socket.destroy();
 });
 
 function shutdown(code) {
