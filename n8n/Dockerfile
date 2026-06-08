@@ -37,6 +37,7 @@ RUN apt-get update \
       novnc \
       websockify \
       xterm \
+      xmessage \
       ca-certificates \
       fonts-liberation \
       fonts-noto \
@@ -88,7 +89,7 @@ const AI_STUDIO_PROFILE_DIR = process.env.AI_STUDIO_PROFILE_DIR || '/data/playwr
 const AI_STUDIO_RUNTIME_PROFILE_DIR = process.env.AI_STUDIO_RUNTIME_PROFILE_DIR || '/tmp/aistudio-profile-runtime';
 
 const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
-const NOVNC_READY_PATH = '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify';
+const NOVNC_READY_PATH = '/novnc/vnc_lite.html?autoconnect=true&resize=scale&path=websockify';
 
 // MongoDB này chỉ dùng cho RAM/cost/network, không dùng cho n8n login/workflow.
 const MONGODB_URI =
@@ -161,6 +162,12 @@ function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function writeFileIfMissing(filePath, content) {
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, content, 'utf8');
+  }
+}
+
 function resetDir(dirPath) {
   fs.rmSync(dirPath, { recursive: true, force: true });
   fs.mkdirSync(dirPath, { recursive: true });
@@ -228,8 +235,39 @@ function isPortOpen(port) {
 async function ensureDesktopServices() {
   fs.mkdirSync('/data/playwright', { recursive: true });
   fs.mkdirSync('/home/node', { recursive: true });
+  fs.mkdirSync('/home/node/.fluxbox', { recursive: true });
   fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
   fs.mkdirSync('/tmp/.X11-unix', { recursive: true });
+
+  writeFileIfMissing(
+    '/home/node/.fluxbox/init',
+    [
+      'session.screen0.toolbar.visible:        false',
+      'session.screen0.slit.autoHide:          false',
+      'session.screen0.slit.visible:           false',
+      'session.screen0.workspaces:             1',
+      'session.screen0.focusModel:             ClickFocus',
+      'session.screen0.tabFocusModel:          ClickToTabFocus',
+      'session.screen0.focusNewWindows:        true',
+      'session.screen0.focusSameHead:          false',
+      'session.screen0.windowPlacement:        RowSmartPlacement',
+      'session.screen0.rowPlacementDirection:  LeftToRight',
+      'session.screen0.colPlacementDirection:  TopToBottom',
+      'session.screen0.menu.alpha:             255',
+      'session.screen0.window.focus.alpha:     255',
+      'session.screen0.window.unfocus.alpha:   255',
+      'session.screen0.toolbar.alpha:          255',
+      'session.screen0.slit.alpha:             255',
+      'session.screen0.allowRemoteActions:     false',
+      'session.screen0.titlebar.left:          Stick',
+      'session.screen0.titlebar.right:         Minimize Maximize Close',
+      '',
+    ].join('\n')
+  );
+  writeFileIfMissing(
+    '/home/node/.fluxbox/startup',
+    '#!/bin/sh\nexec fluxbox\n'
+  );
 
   process.env.DISPLAY = DISPLAY_NUM;
 
@@ -490,6 +528,14 @@ async function waitForProfileSettled(ms = 2500) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function cleanupChromeSingletonFiles(userDataDir) {
+  for (const name of ['SingletonCookie', 'SingletonLock', 'SingletonSocket']) {
+    try {
+      fs.rmSync(path.join(userDataDir, name), { force: true, recursive: true });
+    } catch {}
+  }
+}
+
 async function startAiStudioGui() {
   await ensureDesktopServices();
   const chromePath = getChromeExecutablePath();
@@ -511,28 +557,15 @@ async function startAiStudioGui() {
   }
 
   fs.mkdirSync(AI_STUDIO_PROFILE_DIR, { recursive: true });
-  resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
-
   const restoreResult = { ok: false, skipped: 'disabled' };
-
   let runtimeProfileSource = AI_STUDIO_PROFILE_DIR;
-  if (hasProfileFiles()) {
-    try {
-      copyDirContents(AI_STUDIO_PROFILE_DIR, AI_STUDIO_RUNTIME_PROFILE_DIR);
-      runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
-    } catch (err) {
-      console.error('[aistudio-profile] failed to prepare runtime profile copy:', err.message);
-      runtimeProfileSource = AI_STUDIO_PROFILE_DIR;
-    }
-  } else {
-    runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
-  }
 
   const useCleanProfile = String(process.env.AI_STUDIO_FORCE_CLEAN_PROFILE || 'false').toLowerCase() === 'true';
   if (useCleanProfile) {
     resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
     runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
   }
+  cleanupChromeSingletonFiles(runtimeProfileSource);
 
   const { chromium } = require('playwright-extra');
   const StealthPlugin = require('puppeteer-extra-plugin-stealth');
@@ -550,14 +583,21 @@ async function startAiStudioGui() {
     '--disable-sync',
     '--disable-breakpad',
     '--disable-crash-reporter',
-    '--disable-extensions',
-    '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,PushMessaging',
+    '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter,OptimizationHints,PushMessaging,VizDisplayCompositor,RendererCodeIntegrity,site-per-process,IsolateOrigins',
     '--password-store=basic',
     '--use-mock-keychain',
     '--window-size=1365,900',
     '--start-maximized',
     '--no-first-run',
     '--no-default-browser-check',
+    '--disable-session-crashed-bubble',
+    '--disable-infobars',
+    '--disable-popup-blocking',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-accelerated-2d-canvas',
+    '--disable-gpu-compositing',
+    '--disable-renderer-accessibility',
+    '--disable-features=InfiniteSessionRestore',
     '--lang=en-US',
   ];
 
@@ -581,6 +621,7 @@ async function startAiStudioGui() {
     console.error('[aistudio-playwright] first launch failed, retrying with clean runtime profile:', error.message);
     resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
     aiStudioLastLaunchUsedCleanProfile = true;
+    cleanupChromeSingletonFiles(AI_STUDIO_RUNTIME_PROFILE_DIR);
     try {
       aiStudioGuiContext = await launchPersistent(AI_STUDIO_RUNTIME_PROFILE_DIR);
     } catch (retryError) {
@@ -590,14 +631,6 @@ async function startAiStudioGui() {
   }
 
   aiStudioGuiContext.on('close', async () => {
-    if (fs.existsSync(AI_STUDIO_RUNTIME_PROFILE_DIR) && !aiStudioLastLaunchUsedCleanProfile) {
-      try {
-        resetDir(AI_STUDIO_PROFILE_DIR);
-        copyDirContents(AI_STUDIO_RUNTIME_PROFILE_DIR, AI_STUDIO_PROFILE_DIR);
-      } catch (err) {
-        console.error('[aistudio-profile] failed to sync runtime profile back:', err.message);
-      }
-    }
     aiStudioGuiContext = null;
     aiStudioGuiPage = null;
   });
