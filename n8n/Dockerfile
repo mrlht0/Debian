@@ -73,6 +73,7 @@ const os = require('node:os');
 const { execSync, spawn } = require('node:child_process');
 const path = require('node:path');
 const httpProxy = require('http-proxy');
+const { Client: PgClient } = require('pg');
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
 const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
