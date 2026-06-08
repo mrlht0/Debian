@@ -61,7 +61,7 @@ RUN apt-get update \
     && npm install -g --no-audit --no-fund n8n@2.22.4 \
     && npm init -y >/dev/null 2>&1 \
     && npm install --no-package-lock --no-save --no-audit --no-fund \
-      http-proxy mongoose mongodb pg playwright-core
+      http-proxy mongoose mongodb pg playwright playwright-core playwright-extra puppeteer-extra-plugin-stealth
   
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -412,8 +412,10 @@ function getChromiumExecutablePath() {
 }
 
 async function launchChromium(options = {}) {
-  const { chromium } = require('playwright-core');
+  const { chromium } = require('playwright-extra');
+  const StealthPlugin = require('puppeteer-extra-plugin-stealth');
   const executablePath = getChromiumExecutablePath();
+  chromium.use(StealthPlugin());
 
   const isHeadless = options.headless ?? false;
 
@@ -490,6 +492,7 @@ async function waitForProfileSettled(ms = 2500) {
 
 async function startAiStudioGui() {
   await ensureDesktopServices();
+  const chromePath = getChromeExecutablePath();
 
   if (aiStudioGuiContext) {
     return {
@@ -503,7 +506,6 @@ async function startAiStudioGui() {
     };
   }
 
-  const chromePath = getChromeExecutablePath();
   if (!chromePath) {
     throw new Error('Không tìm thấy Google Chrome/Chromium executable trong container.');
   }
@@ -532,10 +534,11 @@ async function startAiStudioGui() {
     runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
   }
 
-  const { chromium } = require('playwright-core');
+  const { chromium } = require('playwright-extra');
+  const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+  chromium.use(StealthPlugin());
   const contextArgs = [
     '--no-sandbox',
-    '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
     '--disable-gpu',
     '--disable-software-rasterizer',
