@@ -3,6 +3,7 @@ FROM node:22-bookworm-slim
 
 ENV N8N_PORT=5678 \
     N8N_LISTEN_ADDRESS=127.0.0.1 \
+    N8N_PUSH_BACKEND=sse \
     N8N_HIRING_BANNER=false \
     N8N_DIAGNOSTICS_ENABLED=false \
     N8N_RUNNERS_ENABLED=false \
@@ -118,6 +119,26 @@ function getStableMachineId() {
   }
   if (process.env.RAILWAY_PUBLIC_DOMAIN) {
     return `railway_${sanitizeId(process.env.RAILWAY_PUBLIC_DOMAIN)}`;
+  }
+  if (process.env.RAILWAY_STATIC_URL) {
+    return `railway_${sanitizeId(process.env.RAILWAY_STATIC_URL)}`;
+  }
+  if (process.env.RENDER_SERVICE_ID) {
+    return `render_${sanitizeId(process.env.RENDER_SERVICE_ID)}`;
+  }
+  if (process.env.RENDER_EXTERNAL_URL) {
+    try {
+      return `render_${sanitizeId(new URL(process.env.RENDER_EXTERNAL_URL).hostname)}`;
+    } catch {}
+  }
+  if (process.env.FLY_APP_NAME) {
+    return `fly_${sanitizeId(process.env.FLY_APP_NAME)}`;
+  }
+  if (process.env.KOYEB_SERVICE_NAME) {
+    return `koyeb_${sanitizeId(process.env.KOYEB_SERVICE_NAME)}`;
+  }
+  if (process.env.COOLIFY_FQDN) {
+    return `coolify_${sanitizeId(process.env.COOLIFY_FQDN)}`;
   }
   return `host_${sanitizeId(os.hostname() || 'unknown')}`;
 }
@@ -436,18 +457,23 @@ async function buildMonitorStats() {
       rssBytes: mem.rss,
     },
     tracked: {
+      totalTrackedRss: `${toMB(tracked.totalTrackedRssBytes)} MB`,
       totalTrackedRssMb: Number(toMB(tracked.totalTrackedRssBytes)),
       totalTrackedRssBytes: tracked.totalTrackedRssBytes,
       processes: tracked.trackedProcesses,
     },
     container: {
+      memoryCurrent: cgroup.memoryCurrentBytes != null ? `${toMB(cgroup.memoryCurrentBytes)} MB` : null,
       memoryCurrentMb: cgroup.memoryCurrentBytes != null ? Number(toMB(cgroup.memoryCurrentBytes)) : null,
       memoryCurrentBytes: cgroup.memoryCurrentBytes,
+      memoryLimit: cgroup.memoryMaxBytes != null ? `${toMB(cgroup.memoryMaxBytes)} MB` : null,
       memoryLimitMb: cgroup.memoryMaxBytes != null ? Number(toMB(cgroup.memoryMaxBytes)) : null,
       memoryLimitBytes: cgroup.memoryMaxBytes,
       cpuUsageUsec: cgroup.cpuUsageUsec,
       networkTxBytes: txBytes,
       networkRxBytes: rxBytes,
+      networkTx: `${(txBytes / 1024 / 1024 / 1024).toFixed(4)} GB`,
+      networkRx: `${(rxBytes / 1024 / 1024 / 1024).toFixed(4)} GB`,
       networkTxGb: Number((txBytes / 1024 / 1024 / 1024).toFixed(4)),
       networkRxGb: Number((rxBytes / 1024 / 1024 / 1024).toFixed(4)),
     },
@@ -567,6 +593,7 @@ function buildN8nEnv(publicUrlInput = '') {
     N8N_ENCRYPTION_KEY: process.env.N8N_ENCRYPTION_KEY || 'cliply_fixed_n8n_key_2026_do_not_change_keep_same',
     N8N_PORT: String(INTERNAL_N8N_PORT),
     N8N_LISTEN_ADDRESS: '127.0.0.1',
+    N8N_PUSH_BACKEND: process.env.N8N_PUSH_BACKEND || 'sse',
     N8N_HIRING_BANNER: process.env.N8N_HIRING_BANNER || 'false',
     N8N_DIAGNOSTICS_ENABLED: process.env.N8N_DIAGNOSTICS_ENABLED || 'false',
     N8N_RUNNERS_ENABLED: process.env.N8N_RUNNERS_ENABLED || 'false',
@@ -636,10 +663,32 @@ const proxy = httpProxy.createProxyServer({
   ws: true,
   xfwd: true,
   changeOrigin: false,
+  proxyTimeout: 120000,
 });
 
 proxy.on('error', (err, req, res) => {
   if (res && !res.headersSent) sendText(res, 502, `Proxy error: ${err.message}`);
+});
+
+proxy.on('proxyReq', (proxyReq, req) => {
+  const publicUrl = detectPublicUrlFromRequest(req) || detectPublicUrlFromEnv();
+  if (!publicUrl) return;
+  try {
+    const url = new URL(publicUrl);
+    proxyReq.setHeader('x-forwarded-host', url.host);
+    proxyReq.setHeader('x-forwarded-proto', url.protocol.replace(':', ''));
+    proxyReq.setHeader('x-forwarded-port', url.protocol === 'https:' ? '443' : '80');
+  } catch {}
+});
+
+proxy.on('proxyRes', (proxyRes) => {
+  proxyRes.headers['x-content-type-options'] = 'nosniff';
+  proxyRes.headers['x-frame-options'] = 'SAMEORIGIN';
+  proxyRes.headers['x-xss-protection'] = '1; mode=block';
+  proxyRes.headers['referrer-policy'] = 'strict-origin-when-cross-origin';
+  proxyRes.headers['cache-control'] = proxyRes.headers['cache-control'] || 'no-store';
+  delete proxyRes.headers['x-powered-by'];
+  delete proxyRes.headers['server'];
 });
 
 async function ensureN8nStarted(publicUrlInput = '') {
