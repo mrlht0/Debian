@@ -92,6 +92,7 @@ const AI_STUDIO_RUNTIME_PROFILE_DIR = process.env.AI_STUDIO_RUNTIME_PROFILE_DIR 
 const AI_STUDIO_PROFILE_BACKUP_ENABLED = String(process.env.AI_STUDIO_PROFILE_BACKUP_ENABLED || 'true').toLowerCase() !== 'false';
 const AI_STUDIO_PROFILE_SYNC_INTERVAL_MS = Number(process.env.AI_STUDIO_PROFILE_SYNC_INTERVAL_MS || 120000);
 const AI_STUDIO_PROFILE_BACKUP_KEY = process.env.AI_STUDIO_PROFILE_BACKUP_KEY || '';
+const AI_STUDIO_PROFILE_MIN_HEALTHY_MS = Number(process.env.AI_STUDIO_PROFILE_MIN_HEALTHY_MS || 300000);
 
 const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
 const NOVNC_READY_PATH = '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify';
@@ -114,6 +115,8 @@ let aiStudioGuiContext = null;
 let aiStudioGuiPage = null;
 let aiStudioChromeProcess = null;
 let aiStudioLastLaunchUsedCleanProfile = false;
+let aiStudioLaunchStartedAt = 0;
+let aiStudioProfileSyncEnabledForSession = false;
 let fallbackXtermProcess = null;
 let xvfbProcess = null;
 let fluxboxProcess = null;
@@ -547,6 +550,9 @@ async function restoreAiStudioProfileFromDb() {
 
 async function backupAiStudioProfileToDb(reason = 'manual') {
   if (!AI_STUDIO_PROFILE_BACKUP_ENABLED) return { ok: false, skipped: 'disabled' };
+  if (!aiStudioProfileSyncEnabledForSession && reason !== 'manual' && reason !== 'api') {
+    return { ok: false, skipped: 'session_backup_disabled' };
+  }
   if (profileBackupInProgress) return { ok: false, skipped: 'backup_in_progress' };
   if (!hasProfileFiles()) return { ok: false, skipped: 'profile_empty' };
 
@@ -692,6 +698,7 @@ async function startAiStudioGui() {
     resetDir(AI_STUDIO_RUNTIME_PROFILE_DIR);
     runtimeProfileSource = AI_STUDIO_RUNTIME_PROFILE_DIR;
   }
+  aiStudioProfileSyncEnabledForSession = !useCleanProfile;
 
   const chromeArgs = [
     `--user-data-dir=${runtimeProfileSource}`,
@@ -738,9 +745,18 @@ async function startAiStudioGui() {
   });
 
   aiStudioLastLaunchUsedCleanProfile = useCleanProfile;
+  aiStudioLaunchStartedAt = Date.now();
 
   aiStudioChromeProcess.on('exit', () => {
-    if (fs.existsSync(AI_STUDIO_RUNTIME_PROFILE_DIR) && !aiStudioLastLaunchUsedCleanProfile) {
+    const sessionAliveMs = aiStudioLaunchStartedAt ? Date.now() - aiStudioLaunchStartedAt : 0;
+    const sessionWasHealthyEnough = sessionAliveMs >= AI_STUDIO_PROFILE_MIN_HEALTHY_MS;
+
+    if (
+      fs.existsSync(AI_STUDIO_RUNTIME_PROFILE_DIR) &&
+      !aiStudioLastLaunchUsedCleanProfile &&
+      aiStudioProfileSyncEnabledForSession &&
+      sessionWasHealthyEnough
+    ) {
       try {
         resetDir(AI_STUDIO_PROFILE_DIR);
         copyDirContents(AI_STUDIO_RUNTIME_PROFILE_DIR, AI_STUDIO_PROFILE_DIR);
@@ -748,8 +764,13 @@ async function startAiStudioGui() {
         console.error('[aistudio-profile] failed to sync runtime profile back:', err.message);
       }
     }
-    backupAiStudioProfileToDb('chrome_exit').catch(() => {});
+    if (sessionWasHealthyEnough) {
+      backupAiStudioProfileToDb('chrome_exit').catch(() => {});
+    } else {
+      console.warn(`[aistudio-profile] skip chrome_exit backup; session alive only ${sessionAliveMs}ms`);
+    }
     aiStudioChromeProcess = null;
+    aiStudioLaunchStartedAt = 0;
   });
 
   const stayedAlive = await waitForCondition(() => isChildAlive(aiStudioChromeProcess), 4000, 250);
@@ -772,6 +793,8 @@ async function startAiStudioGui() {
     });
 
     aiStudioLastLaunchUsedCleanProfile = true;
+    aiStudioProfileSyncEnabledForSession = false;
+    aiStudioLaunchStartedAt = Date.now();
 
     const retryAlive = await waitForCondition(() => isChildAlive(aiStudioChromeProcess), 4000, 250);
     await waitForProfileSettled(1500);
