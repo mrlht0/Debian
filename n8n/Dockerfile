@@ -37,7 +37,7 @@ RUN apt-get update \
       novnc \
       websockify \
       xterm \
-      xmessage \
+      x11-apps \
       ca-certificates \
       fonts-liberation \
       fonts-noto \
