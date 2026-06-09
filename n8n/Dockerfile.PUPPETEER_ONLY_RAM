@@ -1,7 +1,29 @@
 # syntax=docker/dockerfile:1
 FROM mcr.microsoft.com/playwright:v1.56.1-noble
 
-ENV PORT=8080 \
+ENV N8N_PORT=5678 \
+    N8N_LISTEN_ADDRESS=127.0.0.1 \
+    N8N_PUSH_BACKEND=sse \
+    N8N_HIRING_BANNER=false \
+    N8N_DIAGNOSTICS_ENABLED=false \
+    N8N_RUNNERS_ENABLED=false \
+    N8N_COMMUNITY_PACKAGES_ENABLED=false \
+    N8N_BLOCK_ENV_ACCESS_IN_NODE=false \
+    EXECUTIONS_PROCESS=main \
+    EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+    EXECUTIONS_DATA_SAVE_ON_ERROR=none \
+    EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+    NODE_FUNCTION_ALLOW_EXTERNAL=mongodb,pg,puppeteer \
+    NODE_FUNCTION_ALLOW_BUILTIN=* \
+    DB_TYPE=postgresdb \
+    DB_POSTGRESDB_HOST=aws-1-ap-south-1.pooler.supabase.com \
+    DB_POSTGRESDB_PORT=5432 \
+    DB_POSTGRESDB_DATABASE=postgres \
+    DB_POSTGRESDB_USER=postgres.jiewotcsywbwiuxtpwpm \
+    DB_POSTGRESDB_PASSWORD=Ty48216965@ \
+    DB_POSTGRESDB_SSL_ENABLED=true \
+    DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false \
+    N8N_ENCRYPTION_KEY=cliply_fixed_n8n_key_2026_do_not_change_keep_same \
     DISPLAY=:99 \
     NOVNC_INTERNAL_PORT=6080 \
     VNC_INTERNAL_PORT=5900 \
@@ -39,13 +61,10 @@ RUN apt-get update \
       curl \
     && rm -rf /var/lib/apt/lists/* \
     && if ! id -u node >/dev/null 2>&1; then useradd -m -s /bin/bash node; fi \
-    && npm config set fund false \
-    && npm config set audit false \
+    && npm install -g --no-audit --no-fund n8n@2.22.4 \
     && npm init -y >/dev/null 2>&1 \
-    && PUPPETEER_SKIP_DOWNLOAD=true npm install --no-package-lock --no-save \
-      http-proxy mongoose mongodb puppeteer \
-    && rm -rf /var/lib/apt/lists/* \
-    && true
+    && PUPPETEER_SKIP_DOWNLOAD=true npm install --no-package-lock --no-save --no-audit --no-fund \
+      http-proxy mongoose mongodb pg puppeteer
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
@@ -57,16 +76,17 @@ const os = require('node:os');
 const path = require('node:path');
 const { execSync, spawn } = require('node:child_process');
 const httpProxy = require('http-proxy');
+const { Client: PgClient } = require('pg');
 
 const PUBLIC_PORT = Number(process.env.PORT || 8080);
+const INTERNAL_N8N_PORT = Number(process.env.N8N_PORT || 5678);
 const DISPLAY_NUM = process.env.DISPLAY || ':99';
 const NOVNC_PORT = Number(process.env.NOVNC_INTERNAL_PORT || 6080);
 const VNC_PORT = Number(process.env.VNC_INTERNAL_PORT || 5900);
-const RAM_TOKEN = process.env.RAM_TOKEN || 'cliply_ram_secret_token_2026';
+const RAM_TOKEN = process.env.RAM_TOKEN || '';
 const NOVNC_READY_PATH = '/novnc/vnc.html?autoconnect=true&resize=scale&path=websockify';
 const PUPPETEER_PROFILE_DIR = process.env.PUPPETEER_PROFILE_DIR || '/data/puppeteer/browser-profile';
 const PUPPETEER_RUNTIME_PROFILE_DIR = process.env.PUPPETEER_RUNTIME_PROFILE_DIR || '/tmp/puppeteer-profile-runtime';
-const UPLOAD_DIR = '/app/uploads';
 
 const MONGODB_URI =
   process.env.MONGODB_URI ||
@@ -84,43 +104,35 @@ let xvfbProcess = null;
 let fluxboxProcess = null;
 let x11vncProcess = null;
 let websockifyProcess = null;
+let n8nReady = false;
+let n8nChild = null;
+let n8nStartingPromise = null;
+
+const pendingQueue = [];
 
 const toMB = (bytes) => (bytes / 1024 / 1024).toFixed(2);
 const toGB = (bytes) => (bytes / 1024 / 1024 / 1024).toFixed(2);
 
 function safeExec(cmd) {
   try {
-    return execSync(cmd, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: '/bin/bash',
-    })
-      .toString()
-      .trim();
+    return execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'], shell: '/bin/bash' }).toString().trim();
   } catch {
     return '';
   }
 }
 
 function sendJson(res, code, payload) {
-  res.writeHead(code, {
-    'Content-Type': 'application/json; charset=utf-8',
-  });
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload, null, 2));
 }
 
 function sendText(res, code, text) {
-  res.writeHead(code, {
-    'Content-Type': 'text/plain; charset=utf-8',
-  });
+  res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(text);
 }
 
 function sanitizeId(value) {
-  return String(value || '')
-    .trim()
-    .replace(/^https?:\/\//i, '')
-    .replace(/\/+$/, '')
-    .replace(/[^a-zA-Z0-9_-]/g, '_');
+  return String(value || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 function getStableMachineId() {
@@ -147,28 +159,29 @@ function getProjectName() {
   return getStableMachineId();
 }
 
+function getN8nSchemaName(machineId) {
+  if (process.env.DB_POSTGRESDB_SCHEMA) {
+    return sanitizeId(process.env.DB_POSTGRESDB_SCHEMA).replace(/-/g, '_');
+  }
+  return `n8n_${sanitizeId(machineId).replace(/-/g, '_')}`;
+}
+
 function spawnManaged(name, command, args, options = {}) {
   const child = spawn(command, args, {
     stdio: options.stdio || ['ignore', 'ignore', 'pipe'],
     env: options.env || process.env,
     detached: false,
   });
-
-  child.on('error', (err) => {
-    console.error(`[${name}] failed to start:`, err.message);
-  });
-
+  child.on('error', (err) => console.error(`[${name}] failed to start:`, err.message));
   if (child.stderr) {
     child.stderr.on('data', (buf) => {
       const msg = String(buf).trim();
       if (msg) console.log(`[${name}] ${msg}`);
     });
   }
-
   child.on('exit', (code, signal) => {
     console.log(`[${name}] exited code=${code} signal=${signal}`);
   });
-
   childProcesses.push(child);
   return child;
 }
@@ -186,9 +199,7 @@ function ensureDir(dirPath) {
 }
 
 function writeFileIfMissing(filePath, content) {
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, content, 'utf8');
-  }
+  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, content, 'utf8');
 }
 
 function resetDir(dirPath) {
@@ -215,17 +226,14 @@ function isDisplayResponsive() {
 
 function cleanupStaleDisplay() {
   if (isDisplayResponsive()) return false;
-
   const id = displayId();
   try {
     execSync(`pkill -f "Xvfb ${DISPLAY_NUM}" || true`, { stdio: 'ignore', shell: '/bin/bash' });
   } catch {}
-
   try {
     fs.rmSync(`/tmp/.X${id}-lock`, { force: true });
     fs.rmSync(`/tmp/.X11-unix/X${id}`, { force: true });
   } catch {}
-
   xvfbProcess = null;
   fluxboxProcess = null;
   x11vncProcess = null;
@@ -251,7 +259,6 @@ async function ensureDesktopServices() {
   ensureDir('/home/node');
   ensureDir('/home/node/.fluxbox');
   ensureDir(PUPPETEER_PROFILE_DIR);
-  ensureDir(UPLOAD_DIR);
   ensureDir('/tmp/.X11-unix');
 
   writeFileIfMissing(
@@ -264,10 +271,7 @@ async function ensureDesktopServices() {
       'session.screen0.focusModel:             ClickFocus',
       'session.screen0.tabFocusModel:          ClickToTabFocus',
       'session.screen0.focusNewWindows:        true',
-      'session.screen0.focusSameHead:          false',
       'session.screen0.windowPlacement:        RowSmartPlacement',
-      'session.screen0.rowPlacementDirection:  LeftToRight',
-      'session.screen0.colPlacementDirection:  TopToBottom',
       '',
     ].join('\n')
   );
@@ -279,27 +283,16 @@ async function ensureDesktopServices() {
   if (!isDisplayResponsive()) {
     if (!isChildAlive(xvfbProcess)) {
       xvfbProcess = spawnManaged('xvfb', 'Xvfb', [
-        DISPLAY_NUM,
-        '-screen',
-        '0',
-        '1365x900x24',
-        '-ac',
-        '+extension',
-        'RANDR',
-        '-nolisten',
-        'tcp',
+        DISPLAY_NUM, '-screen', '0', '1365x900x24', '-ac', '+extension', 'RANDR', '-nolisten', 'tcp',
       ]);
     }
-
     for (let i = 0; i < 20; i++) {
       if (isDisplayResponsive()) break;
       await waitMs(300);
     }
   }
 
-  if (!isDisplayResponsive()) {
-    throw new Error(`X server ${DISPLAY_NUM} is not ready.`);
-  }
+  if (!isDisplayResponsive()) throw new Error(`X server ${DISPLAY_NUM} is not ready.`);
 
   if (!isChildAlive(fluxboxProcess)) {
     fluxboxProcess = spawnManaged('fluxbox', 'fluxbox', [], {
@@ -310,23 +303,8 @@ async function ensureDesktopServices() {
 
   if (!isChildAlive(x11vncProcess) || !(await isPortOpen(VNC_PORT))) {
     x11vncProcess = spawnManaged('x11vnc', 'x11vnc', [
-      '-display',
-      DISPLAY_NUM,
-      '-rfbport',
-      String(VNC_PORT),
-      '-forever',
-      '-shared',
-      '-nopw',
-      '-noxdamage',
-      '-repeat',
-      '-rfbwait',
-      '120000',
-      '-defer',
-      '10',
-      '-wait',
-      '10',
-      '-o',
-      '/tmp/x11vnc.log',
+      '-display', DISPLAY_NUM, '-rfbport', String(VNC_PORT), '-forever', '-shared', '-nopw', '-noxdamage',
+      '-repeat', '-rfbwait', '120000', '-defer', '10', '-wait', '10', '-o', '/tmp/x11vnc.log',
     ]);
     for (let i = 0; i < 20; i++) {
       if (await isPortOpen(VNC_PORT)) break;
@@ -334,21 +312,12 @@ async function ensureDesktopServices() {
     }
   }
 
-  const novncWebCandidates = [
-    '/usr/share/novnc',
-    '/usr/share/noVNC',
-    '/usr/share/webapps/novnc',
-  ];
+  const novncWebCandidates = ['/usr/share/novnc', '/usr/share/noVNC', '/usr/share/webapps/novnc'];
   const novncWeb = novncWebCandidates.find((x) => fs.existsSync(x)) || '/usr/share/novnc';
 
   if (!isChildAlive(websockifyProcess) || !(await isPortOpen(NOVNC_PORT))) {
     websockifyProcess = spawnManaged('websockify', 'websockify', [
-      '--web',
-      novncWeb,
-      '--heartbeat',
-      '30',
-      String(NOVNC_PORT),
-      `127.0.0.1:${VNC_PORT}`,
+      '--web', novncWeb, '--heartbeat', '30', String(NOVNC_PORT), `127.0.0.1:${VNC_PORT}`,
     ]);
     for (let i = 0; i < 20; i++) {
       if (await isPortOpen(NOVNC_PORT)) break;
@@ -363,31 +332,20 @@ async function ensureDesktopServices() {
 
 function ensureFallbackTerminal() {
   if (isChildAlive(fallbackXtermProcess)) return;
-
   fallbackXtermProcess = spawnManaged('desktop-xterm', 'xterm', [
-    '-geometry',
-    '120x30+40+40',
-    '-fa',
-    'Monospace',
-    '-fs',
-    '11',
-    '-title',
-    'Puppeteer Desktop',
-    '-e',
-    'bash',
-    '-lc',
-    'echo "Desktop is ready."; echo "If Chrome crashes, inspect logs."; tail -f /tmp/x11vnc.log',
+    '-geometry', '120x30+40+40',
+    '-fa', 'Monospace',
+    '-fs', '11',
+    '-title', 'n8n Puppeteer Desktop',
+    '-e', 'bash', '-lc',
+    'echo "Desktop is ready."; tail -f /tmp/x11vnc.log',
   ], {
     env: { ...process.env, DISPLAY: DISPLAY_NUM, HOME: '/home/node' },
   });
 }
 
 function findPlaywrightBundledChromium() {
-  const roots = [
-    process.env.PLAYWRIGHT_BROWSERS_PATH,
-    '/ms-playwright',
-  ].filter(Boolean);
-
+  const roots = [process.env.PLAYWRIGHT_BROWSERS_PATH, '/ms-playwright'].filter(Boolean);
   for (const root of roots) {
     try {
       if (!fs.existsSync(root)) continue;
@@ -403,7 +361,6 @@ function findPlaywrightBundledChromium() {
       }
     } catch {}
   }
-
   return '';
 }
 
@@ -417,26 +374,10 @@ function getChromeExecutablePath() {
     '/usr/bin/chromium-browser',
     findPlaywrightBundledChromium(),
   ];
-
   for (const candidate of candidates) {
     if (candidate && fs.existsSync(candidate)) return candidate;
   }
   return '';
-}
-
-async function closeBrowser() {
-  if (browserPage) {
-    try {
-      await browserPage.close();
-    } catch {}
-    browserPage = null;
-  }
-  if (browser) {
-    try {
-      await browser.close();
-    } catch {}
-    browser = null;
-  }
 }
 
 function cleanupChromeSingletonFiles(userDataDir) {
@@ -455,32 +396,23 @@ async function startBrowser(targetUrl = '') {
       await browserPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
       await browserPage.bringToFront().catch(() => {});
     }
-    return {
-      ok: true,
-      reused: true,
-      url: targetUrl || browserPage?.url() || '',
-      noVncPath: NOVNC_READY_PATH,
-    };
+    return { ok: true, reused: true, noVncPath: NOVNC_READY_PATH, url: targetUrl || browserPage?.url() || '' };
   }
 
-  const chromePath = getChromeExecutablePath();
-  if (!chromePath) {
-    throw new Error('Chrome executable not found');
-  }
+  const executablePath = getChromeExecutablePath();
+  if (!executablePath) throw new Error('Chrome executable not found');
 
   const puppeteer = require('puppeteer');
   const useCleanProfile = String(process.env.PUPPETEER_FORCE_CLEAN_PROFILE || 'false').toLowerCase() === 'true';
   const userDataDir = useCleanProfile ? PUPPETEER_RUNTIME_PROFILE_DIR : PUPPETEER_PROFILE_DIR;
 
-  if (useCleanProfile) {
-    resetDir(PUPPETEER_RUNTIME_PROFILE_DIR);
-  }
+  if (useCleanProfile) resetDir(PUPPETEER_RUNTIME_PROFILE_DIR);
   cleanupChromeSingletonFiles(userDataDir);
 
   try {
     browser = await puppeteer.launch({
       headless: false,
-      executablePath: chromePath,
+      executablePath,
       userDataDir,
       defaultViewport: { width: 1365, height: 900 },
       args: [
@@ -493,22 +425,16 @@ async function startBrowser(targetUrl = '') {
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
-        '--password-store=basic',
-        '--use-mock-keychain',
         '--window-size=1365,900',
         '--start-maximized',
         '--no-first-run',
         '--no-default-browser-check',
       ],
-      env: {
-        ...process.env,
-        DISPLAY: DISPLAY_NUM,
-        HOME: '/home/node',
-      },
+      env: { ...process.env, DISPLAY: DISPLAY_NUM, HOME: '/home/node' },
     });
-  } catch (error) {
+  } catch (err) {
     ensureFallbackTerminal();
-    throw new Error(`Puppeteer launch failed at ${chromePath}: ${error.message}`);
+    throw new Error(`Puppeteer launch failed at ${executablePath}: ${err.message}`);
   }
 
   browser.on('disconnected', () => {
@@ -521,13 +447,12 @@ async function startBrowser(targetUrl = '') {
   const finalUrl = targetUrl || 'about:blank';
   await browserPage.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
   await browserPage.bringToFront().catch(() => {});
-
   return {
     ok: true,
     reused: false,
-    url: browserPage.url() || finalUrl,
     noVncPath: NOVNC_READY_PATH,
-    browser: chromePath,
+    url: browserPage.url() || finalUrl,
+    browser: executablePath,
   };
 }
 
@@ -549,19 +474,16 @@ async function readJsonBody(req) {
   }
 }
 
-async function saveUploadedFile(req) {
-  ensureDir(UPLOAD_DIR);
-  const body = await readJsonBody(req);
-  const fileName = path.basename(String(body.fileName || 'upload.bin'));
-  const targetPath = path.join(UPLOAD_DIR, `${Date.now()}-${fileName}`);
-  const content = body.base64 ? Buffer.from(String(body.base64), 'base64') : Buffer.alloc(0);
-  fs.writeFileSync(targetPath, content);
-  return {
-    ok: true,
-    fileName,
-    path: targetPath,
-    sizeBytes: content.length,
-  };
+function readIntFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf8').trim();
+    if (!raw || raw === 'max') return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function loadMongoose() {
@@ -592,7 +514,6 @@ async function connectToMongo() {
   if (!MONGODB_URI) return false;
   const lib = loadMongoose();
   if (lib.connection.readyState >= 1) return true;
-
   let uri = MONGODB_URI;
   try {
     const u = new URL(MONGODB_URI);
@@ -654,7 +575,6 @@ function getCgroupStats() {
   const memoryMaxBytes =
     readIntFile('/sys/fs/cgroup/memory.max') ??
     readIntFile('/sys/fs/cgroup/memory/memory.limit_in_bytes');
-
   let cpuUsageUsec = null;
   try {
     const cpuStatPath = fs.existsSync('/sys/fs/cgroup/cpu.stat')
@@ -669,7 +589,6 @@ function getCgroupStats() {
       if (usageNsec != null) cpuUsageUsec = Math.round(usageNsec / 1000);
     }
   } catch {}
-
   return { memoryCurrentBytes, memoryMaxBytes, cpuUsageUsec };
 }
 
@@ -681,17 +600,14 @@ function parsePsTable(output) {
     .map((line) => {
       const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
       if (!match) return null;
-      return {
-        pid: Number(match[1]),
-        rssKb: Number(match[2]),
-        command: match[3],
-      };
+      return { pid: Number(match[1]), rssKb: Number(match[2]), command: match[3] };
     })
     .filter(Boolean);
 }
 
 function getTrackedProcessStats() {
   const pids = new Set([process.pid]);
+  if (n8nChild?.pid) pids.add(n8nChild.pid);
   for (const child of childProcesses) {
     if (child?.pid) pids.add(child.pid);
   }
@@ -699,9 +615,7 @@ function getTrackedProcessStats() {
   if (browserProcess?.pid) pids.add(browserProcess.pid);
 
   const pidList = [...pids].filter((pid) => Number.isFinite(pid));
-  if (!pidList.length) {
-    return { trackedProcesses: [], totalTrackedRssBytes: 0 };
-  }
+  if (!pidList.length) return { trackedProcesses: [], totalTrackedRssBytes: 0 };
 
   const output = safeExec(`ps -o pid=,rss=,args= -p ${pidList.join(',')}`);
   const trackedProcesses = parsePsTable(output).map((row) => ({
@@ -710,7 +624,6 @@ function getTrackedProcessStats() {
     rssBytes: row.rssKb * 1024,
     command: row.command,
   }));
-
   return {
     trackedProcesses,
     totalTrackedRssBytes: trackedProcesses.reduce((sum, row) => sum + row.rssBytes, 0),
@@ -750,18 +663,19 @@ async function buildMonitorStats() {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
   const usedMem = totalMem - freeMem;
+  const cpu = await measureCpuPercent();
   const mem = process.memoryUsage();
   const tracked = getTrackedProcessStats();
   const cgroup = getCgroupStats();
   const txBytes = getCurrentTxBytes();
   const rxBytes = getCurrentRxBytes();
-  const cpu = await measureCpuPercent();
+  const freeOutput = safeExec('free -h');
+  const ps = safeExec('ps aux --sort=-%mem | head -n 10');
 
-  return {
+  const stats = {
     identity: {
       name: getProjectName(),
       machineId: getProjectName(),
-      service: 'puppeteer-only',
       hostname: os.hostname(),
       platform: os.platform(),
       arch: os.arch(),
@@ -805,16 +719,20 @@ async function buildMonitorStats() {
       networkTxGb: Number((txBytes / 1024 / 1024 / 1024).toFixed(4)),
       networkRxGb: Number((rxBytes / 1024 / 1024 / 1024).toFixed(4)),
     },
-    freeCommandOutput: safeExec('free -h'),
-    topProcesses: safeExec('ps aux --sort=-%mem | head -n 10').split('\n').filter(Boolean),
     timestamp: new Date().toISOString(),
+  };
+
+  if (freeOutput) stats.freeCommandOutput = freeOutput;
+  if (ps) stats.topProcesses = ps.split('\n');
+
+  return {
+    stats,
+    rssBytes: cgroup.memoryCurrentBytes || tracked.totalTrackedRssBytes || mem.rss,
   };
 }
 
 async function updateCostHistory(rssBytes) {
-  if (!MONGODB_URI) {
-    return { currentMonth: null, last5MonthsHistory: [], disabled: true };
-  }
+  if (!MONGODB_URI) return { currentMonth: null, last5MonthsHistory: [], disabled: true };
 
   try {
     await connectToMongo();
@@ -844,7 +762,6 @@ async function updateCostHistory(rssBytes) {
       if (currentTxBytes > 0 && record.lastTxBytes > 0 && currentTxBytes >= record.lastTxBytes) {
         record.accumulatedEgressBytes += currentTxBytes - record.lastTxBytes;
       }
-
       record.lastTxBytes = currentTxBytes > 0 ? currentTxBytes : record.lastTxBytes;
       record.lastMeasurementTime = now;
       record.memoryCost = record.accumulatedMemoryMinutes * 0.000462;
@@ -895,6 +812,179 @@ async function updateCostHistory(rssBytes) {
   }
 }
 
+function normalizePublicUrl(raw) {
+  if (!raw) return '';
+  let value = String(raw).trim();
+  if (!value) return '';
+  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return value.replace(/\/+$/, '');
+  }
+}
+
+function isBadPublicHost(host) {
+  if (!host) return true;
+  const clean = String(host).toLowerCase();
+  return clean.includes('localhost') || clean.startsWith('127.') || clean.startsWith('0.0.0.0') || clean.startsWith('::1');
+}
+
+function detectPublicUrlFromEnv() {
+  const candidates = [
+    process.env.WEBHOOK_URL,
+    process.env.N8N_EDITOR_BASE_URL,
+    process.env.RENDER_EXTERNAL_URL,
+    process.env.RAILWAY_STATIC_URL,
+    process.env.RAILWAY_PUBLIC_DOMAIN,
+    process.env.RAILWAY_SERVICE_DOMAIN,
+    process.env.PUBLIC_URL,
+    process.env.PUBLIC_DOMAIN,
+    process.env.APP_URL,
+    process.env.BASE_URL,
+  ];
+  for (const item of candidates) {
+    const normalized = normalizePublicUrl(item);
+    if (!normalized) continue;
+    try {
+      const url = new URL(normalized);
+      if (!isBadPublicHost(url.hostname)) return normalized;
+    } catch {}
+  }
+  return '';
+}
+
+function detectPublicUrlFromRequest(req) {
+  const forwardedHost = req.headers['x-forwarded-host'] || req.headers['x-original-host'] || req.headers['host'];
+  const rawHost = Array.isArray(forwardedHost) ? forwardedHost[0] : String(forwardedHost || '').split(',')[0].trim();
+  if (isBadPublicHost(rawHost)) return '';
+
+  const forwardedProto =
+    req.headers['x-forwarded-proto'] ||
+    req.headers['x-forwarded-protocol'] ||
+    req.headers['x-url-scheme'];
+  let proto = Array.isArray(forwardedProto) ? forwardedProto[0] : String(forwardedProto || '').split(',')[0].trim();
+  if (!proto) proto = 'https';
+  if (!/^https?$/i.test(proto)) proto = 'https';
+  if (proto === 'http' && !rawHost.includes('localhost') && !rawHost.startsWith('127.')) proto = 'https';
+  return normalizePublicUrl(`${proto}://${rawHost}`);
+}
+
+function applyN8nPublicUrlEnv(n8nEnv, publicUrlInput = '') {
+  const publicUrl = normalizePublicUrl(publicUrlInput) || detectPublicUrlFromEnv();
+  if (!publicUrl) return { env: n8nEnv, publicUrl: '' };
+  try {
+    const url = new URL(publicUrl);
+    n8nEnv.WEBHOOK_URL = `${publicUrl}/`;
+    n8nEnv.N8N_EDITOR_BASE_URL = publicUrl;
+    n8nEnv.N8N_HOST = url.hostname;
+    n8nEnv.N8N_PROTOCOL = url.protocol.replace(':', '');
+    n8nEnv.N8N_PROXY_HOPS = process.env.N8N_PROXY_HOPS || '1';
+    if (url.protocol === 'https:') {
+      n8nEnv.N8N_SECURE_COOKIE = process.env.N8N_SECURE_COOKIE || 'true';
+    }
+    return { env: n8nEnv, publicUrl };
+  } catch {
+    return { env: n8nEnv, publicUrl: '' };
+  }
+}
+
+function buildN8nEnv(publicUrlInput = '') {
+  const machineId = getStableMachineId();
+  process.env.MACHINE_ID = machineId;
+  process.env.STABLE_MACHINE_ID = machineId;
+  process.env.APP_MACHINE_ID = machineId;
+  const schemaName = getN8nSchemaName(machineId);
+
+  const n8nEnv = {
+    ...process.env,
+    MACHINE_ID: machineId,
+    STABLE_MACHINE_ID: machineId,
+    APP_MACHINE_ID: machineId,
+    DB_TYPE: process.env.DB_TYPE || 'postgresdb',
+    DB_POSTGRESDB_HOST: process.env.DB_POSTGRESDB_HOST || 'aws-1-ap-south-1.pooler.supabase.com',
+    DB_POSTGRESDB_PORT: process.env.DB_POSTGRESDB_PORT || '5432',
+    DB_POSTGRESDB_DATABASE: process.env.DB_POSTGRESDB_DATABASE || 'postgres',
+    DB_POSTGRESDB_USER: process.env.DB_POSTGRESDB_USER || 'postgres.jiewotcsywbwiuxtpwpm',
+    DB_POSTGRESDB_PASSWORD: process.env.DB_POSTGRESDB_PASSWORD || 'Ty48216965@',
+    DB_POSTGRESDB_SCHEMA: schemaName,
+    DB_POSTGRESDB_SSL_ENABLED: process.env.DB_POSTGRESDB_SSL_ENABLED || 'true',
+    DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: process.env.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED || 'false',
+    N8N_ENCRYPTION_KEY: process.env.N8N_ENCRYPTION_KEY || 'cliply_fixed_n8n_key_2026_do_not_change_keep_same',
+    N8N_PORT: String(INTERNAL_N8N_PORT),
+    N8N_LISTEN_ADDRESS: '127.0.0.1',
+    N8N_PUSH_BACKEND: process.env.N8N_PUSH_BACKEND || 'sse',
+    N8N_HIRING_BANNER: process.env.N8N_HIRING_BANNER || 'false',
+    N8N_DIAGNOSTICS_ENABLED: process.env.N8N_DIAGNOSTICS_ENABLED || 'false',
+    N8N_RUNNERS_ENABLED: process.env.N8N_RUNNERS_ENABLED || 'false',
+    N8N_COMMUNITY_PACKAGES_ENABLED: process.env.N8N_COMMUNITY_PACKAGES_ENABLED || 'false',
+    EXECUTIONS_PROCESS: process.env.EXECUTIONS_PROCESS || 'main',
+    EXECUTIONS_DATA_SAVE_ON_SUCCESS: process.env.EXECUTIONS_DATA_SAVE_ON_SUCCESS || 'none',
+    EXECUTIONS_DATA_SAVE_ON_ERROR: process.env.EXECUTIONS_DATA_SAVE_ON_ERROR || 'none',
+    EXECUTIONS_DATA_SAVE_ON_PROGRESS: process.env.EXECUTIONS_DATA_SAVE_ON_PROGRESS || 'false',
+    N8N_BLOCK_ENV_ACCESS_IN_NODE: process.env.N8N_BLOCK_ENV_ACCESS_IN_NODE || 'false',
+  };
+  return applyN8nPublicUrlEnv(n8nEnv, publicUrlInput);
+}
+
+async function ensureN8nPostgresSchema(n8nEnv) {
+  if (n8nEnv.DB_TYPE !== 'postgresdb') return;
+  const schemaName = n8nEnv.DB_POSTGRESDB_SCHEMA || 'public';
+  if (schemaName === 'public') return;
+
+  const client = new PgClient({
+    host: n8nEnv.DB_POSTGRESDB_HOST,
+    port: Number(n8nEnv.DB_POSTGRESDB_PORT || 5432),
+    database: n8nEnv.DB_POSTGRESDB_DATABASE,
+    user: n8nEnv.DB_POSTGRESDB_USER,
+    password: n8nEnv.DB_POSTGRESDB_PASSWORD,
+    ssl: String(n8nEnv.DB_POSTGRESDB_SSL_ENABLED) === 'true'
+      ? { rejectUnauthorized: String(n8nEnv.DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED) === 'true' }
+      : false,
+  });
+
+  await client.connect();
+  try {
+    await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+function waitForPort(port, host, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    function attempt() {
+      const sock = new net.Socket();
+      sock.setTimeout(1000);
+      sock.on('connect', () => {
+        sock.destroy();
+        resolve();
+      });
+      sock.on('error', () => {
+        sock.destroy();
+        if (Date.now() - start >= timeoutMs) reject(new Error('Timeout'));
+        else setTimeout(attempt, 500);
+      });
+      sock.on('timeout', () => {
+        sock.destroy();
+        setTimeout(attempt, 500);
+      });
+      sock.connect(port, host);
+    }
+    attempt();
+  });
+}
+
+const proxy = httpProxy.createProxyServer({
+  target: `http://127.0.0.1:${INTERNAL_N8N_PORT}`,
+  ws: true,
+  xfwd: true,
+  changeOrigin: false,
+  proxyTimeout: 120000,
+});
+
 const novncProxy = httpProxy.createProxyServer({
   target: `http://127.0.0.1:${NOVNC_PORT}`,
   ws: true,
@@ -903,55 +993,105 @@ const novncProxy = httpProxy.createProxyServer({
 });
 
 novncProxy.on('error', (err, req, res) => {
-  console.error('[novnc-proxy] error:', err.message);
-  if (res && !res.headersSent) {
-    sendText(res, 502, `noVNC proxy error: ${err.message}`);
-  }
+  if (res && !res.headersSent) sendText(res, 502, `noVNC proxy error: ${err.message}`);
 });
+
+proxy.on('error', (err, req, res) => {
+  if (res && !res.headersSent) sendText(res, 502, `Proxy error: ${err.message}`);
+});
+
+proxy.on('proxyReq', (proxyReq, req) => {
+  const publicUrl = detectPublicUrlFromRequest(req) || detectPublicUrlFromEnv();
+  if (!publicUrl) return;
+  try {
+    const url = new URL(publicUrl);
+    proxyReq.setHeader('x-forwarded-host', url.host);
+    proxyReq.setHeader('x-forwarded-proto', url.protocol.replace(':', ''));
+    proxyReq.setHeader('x-forwarded-port', url.protocol === 'https:' ? '443' : '80');
+  } catch {}
+});
+
+proxy.on('proxyRes', (proxyRes) => {
+  proxyRes.headers['x-content-type-options'] = 'nosniff';
+  proxyRes.headers['x-frame-options'] = 'SAMEORIGIN';
+  proxyRes.headers['x-xss-protection'] = '1; mode=block';
+  proxyRes.headers['referrer-policy'] = 'strict-origin-when-cross-origin';
+  proxyRes.headers['cache-control'] = proxyRes.headers['cache-control'] || 'no-store';
+  delete proxyRes.headers['x-powered-by'];
+  delete proxyRes.headers['server'];
+});
+
+async function ensureN8nStarted(publicUrlInput = '') {
+  if (n8nReady) return;
+  if (n8nStartingPromise) {
+    await n8nStartingPromise;
+    return;
+  }
+
+  n8nStartingPromise = (async () => {
+    const { env: n8nEnv, publicUrl } = buildN8nEnv(publicUrlInput);
+    if (!publicUrl) {
+      n8nStartingPromise = null;
+      return;
+    }
+
+    await ensureN8nPostgresSchema(n8nEnv);
+    n8nChild = spawn('n8n', ['start'], { stdio: 'inherit', env: n8nEnv });
+    n8nChild.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 0));
+
+    await waitForPort(INTERNAL_N8N_PORT, '127.0.0.1');
+    n8nReady = true;
+
+    while (pendingQueue.length) {
+      const { req, res, timer } = pendingQueue.shift();
+      clearTimeout(timer);
+      if (!res.writableEnded) proxy.web(req, res);
+    }
+  })();
+
+  await n8nStartingPromise;
+}
+
+async function handleRamRequest(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+  const token = url.searchParams.get('token') || req.headers['x-ram-token'];
+  if (RAM_TOKEN && token !== RAM_TOKEN) {
+    sendJson(res, 401, { error: 'Unauthorized' });
+    return;
+  }
+  const { stats, rssBytes } = await buildMonitorStats();
+  const projectCost = await updateCostHistory(rssBytes);
+  sendJson(res, 200, {
+    identity: stats.identity,
+    cpu: stats.cpu,
+    os: stats.os,
+    node: stats.node,
+    tracked: stats.tracked,
+    container: stats.container,
+    timestamp: stats.timestamp,
+    ...(stats.freeCommandOutput ? { freeCommandOutput: stats.freeCommandOutput } : {}),
+    ...(stats.topProcesses ? { topProcesses: stats.topProcesses } : {}),
+    projectCost,
+  });
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
 
-  if (url.pathname === '/' || url.pathname === '/healthz') {
-    sendJson(res, 200, {
-      ok: true,
-      service: 'puppeteer-only',
-      browserRunning: Boolean(browser),
-    });
+  if (url.pathname === '/healthz') {
+    sendJson(res, 200, { ok: true, service: 'n8n-puppeteer-novnc', n8nReady, browserRunning: Boolean(browser) });
     return;
   }
 
   if (url.pathname === '/ram') {
-    const token = url.searchParams.get('token') || req.headers['x-ram-token'];
-    if (RAM_TOKEN && token !== RAM_TOKEN) {
-      sendJson(res, 401, { error: 'Unauthorized' });
-      return;
-    }
-
-    const stats = await buildMonitorStats();
-    const rssBytes = stats.container.memoryCurrentBytes || stats.tracked.totalTrackedRssBytes || stats.node.rssBytes;
-    const projectCost = await updateCostHistory(rssBytes);
-
-    sendJson(res, 200, {
-      identity: stats.identity,
-      cpu: stats.cpu,
-      os: stats.os,
-      node: stats.node,
-      tracked: stats.tracked,
-      container: stats.container,
-      timestamp: stats.timestamp,
-      ...(stats.freeCommandOutput ? { freeCommandOutput: stats.freeCommandOutput } : {}),
-      ...(stats.topProcesses ? { topProcesses: stats.topProcesses } : {}),
-      projectCost,
-    });
+    await handleRamRequest(req, res);
     return;
   }
 
   if (url.pathname === '/api/browser/start' && req.method === 'POST') {
     try {
       const body = await readJsonBody(req);
-      const result = await startBrowser(body.url || '');
-      sendJson(res, 200, result);
+      sendJson(res, 200, await startBrowser(body.url || ''));
     } catch (err) {
       sendJson(res, 500, { ok: false, error: err.message });
     }
@@ -959,7 +1099,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/browser/close' && req.method === 'POST') {
-    sendJson(res, 200, await closeBrowser());
+    try {
+      if (browserPage) await browserPage.close().catch(() => {});
+      if (browser) await browser.close().catch(() => {});
+      browserPage = null;
+      browser = null;
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
     return;
   }
 
@@ -970,15 +1118,6 @@ const server = http.createServer(async (req, res) => {
       currentUrl: browserPage?.url() || '',
       noVncPath: NOVNC_READY_PATH,
     });
-    return;
-  }
-
-  if (url.pathname === '/api/files/upload' && req.method === 'POST') {
-    try {
-      sendJson(res, 200, await saveUploadedFile(req));
-    } catch (err) {
-      sendJson(res, 500, { ok: false, error: err.message });
-    }
     return;
   }
 
@@ -1018,7 +1157,24 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  sendJson(res, 404, { ok: false, error: 'Not found' });
+  if (!n8nReady) {
+    const timer = setTimeout(() => {
+      if (!res.writableEnded) sendText(res, 503, 'n8n is starting, please retry');
+    }, 60000);
+
+    pendingQueue.push({ req, res, timer });
+    const publicUrlFromRequest = detectPublicUrlFromRequest(req) || detectPublicUrlFromEnv();
+    ensureN8nStarted(publicUrlFromRequest).catch((err) => {
+      while (pendingQueue.length) {
+        const item = pendingQueue.shift();
+        clearTimeout(item.timer);
+        if (!item.res.writableEnded) sendText(item.res, 500, `n8n failed to start: ${err.message}`);
+      }
+    });
+    return;
+  }
+
+  proxy.web(req, res);
 });
 
 server.on('upgrade', (req, socket, head) => {
@@ -1034,32 +1190,44 @@ server.on('upgrade', (req, socket, head) => {
       .catch(() => socket.destroy());
     return;
   }
-  socket.destroy();
+
+  if (!n8nReady) {
+    socket.destroy();
+    return;
+  }
+  proxy.ws(req, socket, head);
 });
 
 function shutdown(code) {
   try {
     server.close();
   } catch {}
-
+  if (n8nChild && !n8nChild.killed) {
+    n8nChild.kill('SIGTERM');
+  }
   for (const child of childProcesses) {
     try {
       if (child && !child.killed) child.kill('SIGTERM');
     } catch {}
   }
-
   process.exit(code);
 }
 
 process.on('SIGTERM', () => shutdown(0));
 process.on('SIGINT', () => shutdown(0));
 
-server.listen(PUBLIC_PORT, '0.0.0.0', () => {
-  console.log(`[puppeteer-only] listening on 0.0.0.0:${PUBLIC_PORT}`);
-});
+(async () => {
+  await new Promise((resolve) => {
+    server.listen(PUBLIC_PORT, '0.0.0.0', () => resolve());
+  });
+  const initialPublicUrl = detectPublicUrlFromEnv();
+  if (initialPublicUrl) {
+    await ensureN8nStarted(initialPublicUrl);
+  }
+})();
 EOF
 
-RUN mkdir -p /data/puppeteer /app/uploads \
+RUN mkdir -p /data/puppeteer \
     && chown -R node:node /app /home/node /data
 
 USER node
