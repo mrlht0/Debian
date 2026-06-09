@@ -5,7 +5,7 @@ ENV PORT=8080 \
     DISPLAY=:99 \
     NOVNC_INTERNAL_PORT=6080 \
     VNC_INTERNAL_PORT=5900 \
-    RAM_TOKEN=cliply_ram_secret_token_2026 \
+    PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_PROFILE_DIR=/data/puppeteer/browser-profile \
     PUPPETEER_RUNTIME_PROFILE_DIR=/tmp/puppeteer-profile-runtime
 
@@ -37,16 +37,15 @@ RUN apt-get update \
       udev \
       bash \
       curl \
-      wget \
-      gnupg \
-    && curl -fsSL -o /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/google-chrome.deb \
-    && rm -f /tmp/google-chrome.deb \
     && rm -rf /var/lib/apt/lists/* \
     && if ! id -u node >/dev/null 2>&1; then useradd -m -s /bin/bash node; fi \
+    && npm config set fund false \
+    && npm config set audit false \
     && npm init -y >/dev/null 2>&1 \
-    && npm install --no-package-lock --no-save --no-audit --no-fund \
-      http-proxy mongoose mongodb puppeteer
+    && PUPPETEER_SKIP_DOWNLOAD=true npm install --no-package-lock --no-save \
+      http-proxy mongoose mongodb puppeteer \
+    && rm -rf /var/lib/apt/lists/* \
+    && true
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
