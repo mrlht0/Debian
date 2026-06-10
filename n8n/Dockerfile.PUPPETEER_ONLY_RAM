@@ -28,6 +28,7 @@ ENV N8N_PORT=5678 \
     NOVNC_INTERNAL_PORT=6080 \
     VNC_INTERNAL_PORT=5900 \
     PUPPETEER_SKIP_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chrome-for-puppeteer \
     PUPPETEER_PROFILE_DIR=/data/puppeteer/browser-profile \
     PUPPETEER_RUNTIME_PROFILE_DIR=/tmp/puppeteer-profile-runtime
 
@@ -64,7 +65,10 @@ RUN apt-get update \
     && npm install -g --no-audit --no-fund n8n@2.22.4 \
     && npm init -y >/dev/null 2>&1 \
     && PUPPETEER_SKIP_DOWNLOAD=true npm install --no-package-lock --no-save --no-audit --no-fund \
-      http-proxy mongoose mongodb pg puppeteer
+      http-proxy mongoose mongodb pg puppeteer \
+    && CHROME_BIN="$(find /ms-playwright -path '*/chrome-linux/chrome' | head -n 1)" \
+    && test -n "$CHROME_BIN" \
+    && ln -sf "$CHROME_BIN" /usr/local/bin/chrome-for-puppeteer
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
