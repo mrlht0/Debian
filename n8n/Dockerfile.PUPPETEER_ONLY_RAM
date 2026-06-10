@@ -68,7 +68,8 @@ RUN apt-get update \
       http-proxy mongoose mongodb pg puppeteer \
     && CHROME_BIN="$(find /ms-playwright -path '*/chrome-linux/chrome' | head -n 1)" \
     && test -n "$CHROME_BIN" \
-    && ln -sf "$CHROME_BIN" /usr/local/bin/chrome-for-puppeteer
+    && printf '#!/bin/sh\nexec "%s" --no-sandbox --disable-setuid-sandbox "$@"\n' "$CHROME_BIN" > /usr/local/bin/chrome-for-puppeteer \
+    && chmod +x /usr/local/bin/chrome-for-puppeteer
 
 RUN cat <<'EOF' > /app/server.js
 'use strict';
