@@ -36,7 +36,7 @@ RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
     echo "AU6/Lg9Fyehi2v9QGTP5AAAAC3R5bGF1QE1yTEhUAQI=" >> /root/.ssh/id_ed25519 && \
     echo "-----END OPENSSH PRIVATE KEY-----" >> /root/.ssh/id_ed25519 && \
     chmod 600 /root/.ssh/id_ed25519 && \
-    git clone git@github.com:mrlht0/MeiAI.git && \
+    git clone https://github.com/mrlht0/ds2api.git && \
     rm /root/.ssh/id_ed25519
 
 WORKDIR /MeiAI
