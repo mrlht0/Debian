@@ -39,7 +39,7 @@ RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
     git clone https://github.com/mrlht0/ds2api.git && \
     rm /root/.ssh/id_ed25519
 
-WORKDIR /MeiAI
+WORKDIR /ds2api
 
 # Cài đặt môi trường Golang mới nhất (1.24.3)
 RUN wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz \
@@ -53,8 +53,8 @@ RUN npm install
 RUN cp config.example.json config.json
 RUN npm ci --prefix webui --no-audit
 RUN npm run build --prefix webui
-RUN go build -o meiai ./cmd/meiai
-RUN chmod +x meiai
+RUN go build -o ds2api ./cmd/ds2api
+RUN chmod +x ds2api
 
 ENV NODE_ENV=production \
     MEIAI_LITE_MODE=0 \
@@ -62,25 +62,25 @@ ENV NODE_ENV=production \
     PORT=5001
 
 # Watchdog Script tự động theo dõi, ghi log tối đa 2000 dòng và hồi sinh ứng dụng khi crash
-RUN printf '#!/bin/bash\n\
-cd /MeiAI\n\
-LOG=/MeiAI/meiai.log\n\
-touch $LOG\n\
-while true\n\
-do\n\
-    echo "==========================" >> $LOG\n\
-    echo "[START] $(date)" >> $LOG\n\
-    ./meiai >> $LOG 2>&1 &\n\
-    PID=$!\n\
-    while kill -0 $PID 2>/dev/null\n\
-    do\n\
-        tail -n 2000 $LOG > ${LOG}.tmp && mv ${LOG}.tmp $LOG\n\
-        sleep 30\n\
-    done\n\
-    echo "[CRASH] restarting in 5s..." >> $LOG\n\
-    sleep 5\n\
-done\n\
-' > /MeiAI/start-meiai.sh && chmod +x /MeiAI/start-meiai.sh
+# RUN printf '#!/bin/bash\n\
+# cd /MeiAI\n\
+# LOG=/ds2api/meiai.log\n\
+# touch $LOG\n\
+# while true\n\
+# do\n\
+#     echo "==========================" >> $LOG\n\
+#     echo "[START] $(date)" >> $LOG\n\
+#     ./meiai >> $LOG 2>&1 &\n\
+#     PID=$!\n\
+#     while kill -0 $PID 2>/dev/null\n\
+#     do\n\
+#         tail -n 2000 $LOG > ${LOG}.tmp && mv ${LOG}.tmp $LOG\n\
+#         sleep 30\n\
+#     done\n\
+#     echo "[CRASH] restarting in 5s..." >> $LOG\n\
+#     sleep 5\n\
+# done\n\
+# ' > /MeiAI/start-meiai.sh && chmod +x /MeiAI/start-meiai.sh
 
 # ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
 WORKDIR /
@@ -206,13 +206,14 @@ echo "Đang khởi động dịch vụ Cloud Dev..."\n\
 \n\
 nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
 \n\
-(\n\
-while true\n\
-do\n\
-    pgrep -f start-meiai.sh >/dev/null || nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
-    sleep 60\n\
-done\n\
-) &\n\
+# (\n\
+# while true\n\
+# do\n\
+#     pgrep -f start-meiai.sh >/dev/null || nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
+#     sleep 60\n\
+# done\n\
+# ) &\n\
+./ds2api
 \n\
 ttyd -p 8081 -W -b /tmux /start.sh &\n\
 ttyd -p 8082 -W -b /terminal bash &\n\
