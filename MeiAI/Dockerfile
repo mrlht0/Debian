@@ -36,18 +36,24 @@ RUN wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz \
     && echo 'export PATH=$PATH:/usr/local/go/bin' >> /root/.bashrc
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Cài đặt dependencies Node và thực hiện Build MeiAI
-RUN npm install
-RUN cp config.example.json config.json
-RUN npm ci --prefix webui --no-audit
-RUN npm run build --prefix webui
-RUN go build -o ds2api ./cmd/ds2api
-RUN chmod +x ds2api
+# Cài đặt dependencies Node và thực hiện Build 
+WORKDIR /ds2api
 
-ENV NODE_ENV=production \
-    MEIAI_LITE_MODE=0 \
-    MEIAI_ADMIN_KEY=admin \
-    PORT=5001
+RUN cp config.example.json config.json
+
+RUN npm ci --prefix webui
+RUN npm run build --prefix webui
+
+RUN go mod download
+
+RUN CGO_ENABLED=0 \
+    go build \
+    -buildvcs=false \
+    -ldflags="-s -w" \
+    -o ds2api \
+    ./cmd/ds2api
+
+RUN chmod +x ds2api
 
 # Watchdog Script tự động theo dõi, ghi log tối đa 2000 dòng và hồi sinh ứng dụng khi crash
 # RUN printf '#!/bin/bash\n\
