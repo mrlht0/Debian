@@ -1,227 +1,187 @@
-# ==============================================================
-# Cloud Dev: ttyd + tmux + Node.js Proxy (Fixed 404 Final)
-# ==============================================================
-
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ─── 1. Cài đặt các gói cơ bản ─────────────────────────
-RUN apt update && apt install -y \
-    bash curl wget git nano \
-    procps htop tmux \
-    ca-certificates \
-    tar net-tools \
-    && curl -fsSL https://deb.nodesource.com/setup_25.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# =====================================================
 
-# ─── 2. Cài đặt ttyd (bản mới nhất) ─────────────────────────
-RUN wget -O /usr/local/bin/ttyd \
-    https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && \
-    chmod +x /usr/local/bin/ttyd
+# Base Packages
 
-# ─── 3. Cấu hình thư mục làm việc & SSH Key bảo mật ───────────
+# =====================================================
+
+RUN apt-get update && apt-get install -y 
+bash curl wget git nano 
+procps htop tmux 
+ca-certificates 
+tar net-tools openssh-client 
+&& rm -rf /var/lib/apt/lists/*
+
+# =====================================================
+
+# NodeJS 22 LTS
+
+# =====================================================
+
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 
+&& apt-get install -y nodejs
+
+# =====================================================
+
+# Go 1.26
+
+# =====================================================
+
+RUN wget -q https://go.dev/dl/go1.26.0.linux-amd64.tar.gz 
+&& rm -rf /usr/local/go 
+&& tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz 
+&& rm go1.26.0.linux-amd64.tar.gz
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# =====================================================
+
+# ttyd
+
+# =====================================================
+
+RUN wget -O /usr/local/bin/ttyd 
+https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 
+&& chmod +x /usr/local/bin/ttyd
+
+# =====================================================
+
+# Clone DS2API
+
+# =====================================================
+
 WORKDIR /
-RUN apt-get update && apt-get install -y git openssh-client
 
-RUN mkdir -p -m 0700 /root/.ssh && \
-    ssh-keyscan github.com >> /root/.ssh/known_hosts
-
-RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
-    echo "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW" >> /root/.ssh/id_ed25519 && \
-    echo "QyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+QAAAJCe7Zalnu2W" >> /root/.ssh/id_ed25519 && \
-    echo "pQAAAAtzc2gtZWQyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+Q" >> /root/.ssh/id_ed25519 && \
-    echo "AAAECu5uyGvQNoDwFalwDHbBQswmv31282a9dUGLoEnkLiIqVC9mYZaFP7edHr6L+/QjZF" >> /root/.ssh/id_ed25519 && \
-    echo "AU6/Lg9Fyehi2v9QGTP5AAAAC3R5bGF1QE1yTEhUAQI=" >> /root/.ssh/id_ed25519 && \
-    echo "-----END OPENSSH PRIVATE KEY-----" >> /root/.ssh/id_ed25519 && \
-    chmod 600 /root/.ssh/id_ed25519 && \
-    git clone https://github.com/mrlht0/ds2api.git && \
-    rm /root/.ssh/id_ed25519
+RUN git clone https://github.com/mrlht0/ds2api.git /ds2api
 
 WORKDIR /ds2api
 
-# Cài đặt môi trường Golang mới nhất (1.24.3)
-RUN wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz \
-    && rm -rf /usr/local/go \
-    && tar -C /usr/local -xzf go1.24.3.linux-amd64.tar.gz \
-    && echo 'export PATH=$PATH:/usr/local/go/bin' >> /root/.bashrc
-ENV PATH="/usr/local/go/bin:${PATH}"
+# =====================================================
 
-# Cài đặt dependencies Node và thực hiện Build MeiAI
-RUN npm install
-RUN cp config.example.json config.json
-RUN npm ci --prefix webui --no-audit
+# Build WebUI
+
+# =====================================================
+
+RUN npm ci --prefix webui
 RUN npm run build --prefix webui
-RUN go build -o ds2api ./cmd/ds2api
+
+# =====================================================
+
+# Config
+
+# =====================================================
+
+RUN cp config.example.json config.json
+
+# =====================================================
+
+# Build Backend
+
+# =====================================================
+
+RUN go mod download
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 
+go build -ldflags="-s -w" 
+-o ds2api ./cmd/ds2api
+
 RUN chmod +x ds2api
 
-ENV NODE_ENV=production \
-    MEIAI_LITE_MODE=0 \
-    MEIAI_ADMIN_KEY=admin \
-    PORT=5001
+ENV PORT=5001
+ENV DS2API_ADMIN_KEY=admin
 
-# Watchdog Script tự động theo dõi, ghi log tối đa 2000 dòng và hồi sinh ứng dụng khi crash
-# RUN printf '#!/bin/bash\n\
-# cd /MeiAI\n\
-# LOG=/ds2api/meiai.log\n\
-# touch $LOG\n\
-# while true\n\
-# do\n\
-#     echo "==========================" >> $LOG\n\
-#     echo "[START] $(date)" >> $LOG\n\
-#     ./meiai >> $LOG 2>&1 &\n\
-#     PID=$!\n\
-#     while kill -0 $PID 2>/dev/null\n\
-#     do\n\
-#         tail -n 2000 $LOG > ${LOG}.tmp && mv ${LOG}.tmp $LOG\n\
-#         sleep 30\n\
-#     done\n\
-#     echo "[CRASH] restarting in 5s..." >> $LOG\n\
-#     sleep 5\n\
-# done\n\
-# ' > /MeiAI/start-meiai.sh && chmod +x /MeiAI/start-meiai.sh
+# =====================================================
 
-# ─── 4. Cấu hình Bash Prompt & Tmux ──────────────────────────────
-WORKDIR /
-RUN echo 'export PS1="\u@debian:\w# "' >> /root/.bashrc
+# tmux
 
-RUN printf "set -g mouse on\n\
-unbind -n MouseDown3Pane\n\
-set -g history-limit 10000\n\
-setw -g mode-keys vi\n\
+# =====================================================
+
+RUN printf "set -g mouse on\n
+set -g history-limit 10000\n
 " > /root/.tmux.conf
 
-# Script tự động tạo và gán layout cho phiên Tmux nền
-RUN printf '#!/bin/bash\n\
-SESSION=main\n\
-tmux has-session -t $SESSION 2>/dev/null\n\
-if [ $? != 0 ]; then\n\
-  tmux new-session -d -s $SESSION\n\
-  tmux split-window -h\n\
-  tmux split-window -v\n\
-  tmux select-layout tiled\n\
-fi\n\
-exec tmux attach -t $SESSION\n\
+RUN printf '#!/bin/bash\n
+SESSION=main\n
+tmux has-session -t $SESSION 2>/dev/null\n
+if [ $? != 0 ]; then\n
+tmux new-session -d -s $SESSION\n
+fi\n
+exec tmux attach -t $SESSION\n
 ' > /start.sh && chmod +x /start.sh
 
-# ─── 5. Thêm công cụ mem_guard (Giới hạn và quản trị RAM tối ưu) ───
-RUN curl -sL https://raw.githubusercontent.com/tylaujjapan0/memcon/main/install.sh | bash
+# =====================================================
 
-# ─── 6. Cấu hình NODE.JS SMART PROXY (Khắc phục triệt để lỗi 404 Trailing Slash) ───
-WORKDIR /app-proxy
-RUN npm init -y && npm install http-proxy
+# DS2API watchdog
 
-RUN printf 'const http = require("http");\n\
-const HttpProxy = require("http-proxy");\n\
-\n\
-const proxy = HttpProxy.createProxyServer({\n\
-    ws: true,\n\
-    changeOrigin: true\n\
-});\n\
-\n\
-const routes = {\n\
-    "/terminal": 8082,\n\
-    "/ttyd": 7681,\n\
-    "/tmux": 8081,\n\
-    "/openclaw": 18789,\n\
-    "/meiai": 5001\n\
-};\n\
-\n\
-function handleProxy(req, res, isWs = false, socket = null, head = null) {\n\
-    let url = req.url;\n\
-    \n\
-    // Tự động chuẩn hóa: Nếu người dùng truy cập /terminal đổi thành /terminal/\n\
-    for (const prefix in routes) {\n\
-        if (url === prefix) {\n\
-            if (!isWs) {\n\
-                res.writeHead(301, { "Location": prefix + "/" });\n\
-                res.end();\n\
-                return;\n\
-            }\n\
-            url = prefix + "/";\n\
-        }\n\
-        \n\
-        if (url.startsWith(prefix + "/")) {\n\
-            const target = `http://127.0.0.1:${routes[prefix]}`;\n\
-            if (isWs) {\n\
-                proxy.ws(req, socket, head, { target });\n\
-            } else {\n\
-                proxy.web(req, res, { target });\n\
-            }\n\
-            return;\n\
-        }\n\
-    }\n\
-\n\
-    // Kiểm tra dải cổng động: /8083 đến /8089 và /10001 đến /10003\n\
-    const dynamicMatch = url.match(/^\\/((?:808[3-9])|(?:1000[1-3]))(?:\\/|$)/);\n\
-    if (dynamicMatch) {\n\
-        const port = dynamicMatch[1];\n\
-        const target = `http://127.0.0.1:${port}`;\n\
-        if (isWs) {\n\
-            proxy.ws(req, socket, head, { target });\n\
-        } else {\n\
-            proxy.web(req, res, { target });\n\
-        }\n\
-        return;\n\
-    }\n\
-\n\
-    // Tuyến mặc định: Xóa tiền tố /10000 nếu có và chuyển tới cổng 10000\n\
-    if (url.startsWith("/10000/")) {\n\
-        req.url = url.substring(6);\n\
-    } else if (url === "/10000") {\n\
-        req.url = "/";\n\
-    }\n\
-    \n\
-    const defaultTarget = "http://127.0.0.1:10000";\n\
-    if (isWs) {\n\
-        proxy.ws(req, socket, head, { target: defaultTarget });\n\
-    } else {\n\
-        proxy.web(req, res, { target: defaultTarget });\n\
-    }\n}\n\
-\n\
-const server = http.createServer((req, res) => {\n\
-    handleProxy(req, res, false);\n\
-});\n\
-\n\
-server.on("upgrade", (req, socket, head) => {\n\
-    handleProxy(req, null, true, socket, head);\n\
-});\n\
-\n\
-proxy.on("error", (err, req, res) => {\n\
-    if (res && !res.headersSent) {\n\
-        res.writeHead(502, { "Content-Type": "text/plain" });\n\
-        res.end("Bad Gateway: Connection Refused");\n\
-    }\n\
-});\n\
-\n\
-server.listen(8080, "0.0.0.0", () => {\n\
-    console.log("🚀 Node.js Smart Proxy đã khắc phục lỗi 404 đang chạy tại port 8080");\n\
-});\n' > proxy.js
+# =====================================================
 
-# ─── 7. Script khởi chạy toàn bộ dịch vụ mạng hệ thống ─────────────────
+RUN printf '#!/bin/bash\n
+cd /ds2api\n
+while true\n
+do\n
+./ds2api\n
+sleep 5\n
+done\n
+' > /ds2api/run-ds2api.sh 
+&& chmod +x /ds2api/run-ds2api.sh
+
+# =====================================================
+
+# Node Proxy
+
+# =====================================================
+
+WORKDIR /proxy
+
+RUN npm init -y
+RUN npm install http-proxy
+
+RUN printf 'const http=require("http");\n
+const proxy=require("http-proxy").createProxyServer({ws:true});\n
+\n
+const routes={\n
+"/tmux":8081,\n
+"/terminal":8082,\n
+"/ds2api":5001\n
+};\n
+\n
+const server=http.createServer((req,res)=>{\n
+for(const p in routes){\n
+if(req.url.startsWith(p)){\n
+proxy.web(req,res,{target:`http://127.0.0.1:${routes[p]}`});\n
+return;\n
+}\n
+}\n
+proxy.web(req,res,{target:"[http://127.0.0.1:5001"});\n\](http://127.0.0.1:5001%22}%29;\n\)
+});\n
+\n
+server.on("upgrade",(req,socket,head)=>{\n
+for(const p in routes){\n
+if(req.url.startsWith(p)){\n
+proxy.ws(req,socket,head,{target:`http://127.0.0.1:${routes[p]}`});\n
+return;\n
+}\n
+}\n
+});\n
+\n
+server.listen(8080,"0.0.0.0");\n' > proxy.js
+
+# =====================================================
+
+# Startup
+
+# =====================================================
+
 WORKDIR /
-RUN printf '#!/bin/bash\n\
-echo "Đang khởi động dịch vụ Cloud Dev..."\n\
-\n\
-nohup /usr/local/bin/mem_guard.sh > /dev/null 2>&1 &\n\
-\n\
-# (\n\
-# while true\n\
-# do\n\
-#     pgrep -f start-meiai.sh >/dev/null || nohup /MeiAI/start-meiai.sh > /dev/null 2>&1 &\n\
-#     sleep 60\n\
-# done\n\
-# ) &\n\
-./ds2api
-\n\
-ttyd -p 8081 -W -b /tmux /start.sh &\n\
-ttyd -p 8082 -W -b /terminal bash &\n\
-\n\
-sleep 2\n\
-\n\
-echo "Khởi động Node.js Smart Proxy..."\n\
-exec node /app-proxy/proxy.js\n\
+
+RUN printf '#!/bin/bash\n
+/ds2api/run-ds2api.sh &\n
+ttyd -p 8081 -W -b /tmux /start.sh &\n
+ttyd -p 8082 -W -b /terminal bash &\n
+exec node /proxy/proxy.js\n
 ' > /run.sh && chmod +x /run.sh
 
 EXPOSE 8080
