@@ -25,19 +25,7 @@ RUN wget -O /usr/local/bin/ttyd \
 WORKDIR /
 RUN apt-get update && apt-get install -y git openssh-client
 
-RUN mkdir -p -m 0700 /root/.ssh && \
-    ssh-keyscan github.com >> /root/.ssh/known_hosts
-
-RUN echo "-----BEGIN OPENSSH PRIVATE KEY-----" > /root/.ssh/id_ed25519 && \
-    echo "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW" >> /root/.ssh/id_ed25519 && \
-    echo "QyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+QAAAJCe7Zalnu2W" >> /root/.ssh/id_ed25519 && \
-    echo "pQAAAAtzc2gtZWQyNTUxOQAAACClQvZmGWhT+3nR6+i/v0I2RQFOvy4PRcnoYtr/UBkz+Q" >> /root/.ssh/id_ed25519 && \
-    echo "AAAECu5uyGvQNoDwFalwDHbBQswmv31282a9dUGLoEnkLiIqVC9mYZaFP7edHr6L+/QjZF" >> /root/.ssh/id_ed25519 && \
-    echo "AU6/Lg9Fyehi2v9QGTP5AAAAC3R5bGF1QE1yTEhUAQI=" >> /root/.ssh/id_ed25519 && \
-    echo "-----END OPENSSH PRIVATE KEY-----" >> /root/.ssh/id_ed25519 && \
-    chmod 600 /root/.ssh/id_ed25519 && \
-    git clone https://github.com/mrlht0/ds2api.git && \
-    rm /root/.ssh/id_ed25519
+RUN git clone https://github.com/mrlht0/ds2api.git
 
 WORKDIR /ds2api
 
